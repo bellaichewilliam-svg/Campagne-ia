@@ -1,14 +1,20 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { Mic2, Key, Bell, Sliders, Save, Play, Volume2, Sheet, CheckCircle2, XCircle, Loader2, Phone } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { signIn, signOut, useSession } from 'next-auth/react'
+import {
+  Mic2, Key, Bell, Sliders, Save, Play, Volume2, Sheet,
+  CheckCircle2, XCircle, Loader2, Phone, LogIn, LogOut,
+  BookOpen, ExternalLink, RefreshCw
+} from 'lucide-react'
 import clsx from 'clsx'
 import PageHeader from '@/components/PageHeader'
 import type { VapiVoice } from '@/lib/vapi'
 
-const TABS = ['Voix IA', 'Téléphonie', 'Google Sheets', 'Intégrations API', 'Notifications', 'Général']
+const TABS = ['Voix IA', 'Téléphonie', 'Google', 'Notion', 'Intégrations API', 'Notifications', 'Général']
 
 export default function SettingsPage() {
+  const { data: session } = useSession()
   const [tab, setTab] = useState('Voix IA')
   const [voices, setVoices] = useState<VapiVoice[]>([])
   const [loadingVoices, setLoadingVoices] = useState(true)
@@ -17,32 +23,108 @@ export default function SettingsPage() {
   const [pitch, setPitch] = useState(0)
   const [filterProvider, setFilterProvider] = useState('all')
 
-  // Google Sheets
-  const [spreadsheetId, setSpreadsheetId] = useState('')
+  // Google OAuth status
+  const [googleStatus, setGoogleStatus] = useState<{ connected: boolean; email?: string; spreadsheetId?: string } | null>(null)
+  const [userSheets, setUserSheets] = useState<{ id: string; name: string }[]>([])
+  const [sheetsLoading, setSheetsLoading] = useState(false)
   const [sheetTestStatus, setSheetTestStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
   const [sheetTestMsg, setSheetTestMsg] = useState('')
+
+  // Notion
+  const [notionToken, setNotionToken] = useState('')
+  const [notionDbId, setNotionDbId] = useState('')
+  const [notionStatus, setNotionStatus] = useState<{ connected: boolean } | null>(null)
+  const [notionTestStatus, setNotionTestStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
+  const [notionTestMsg, setNotionTestMsg] = useState('')
+
+  const loadGoogleStatus = useCallback(async () => {
+    const res = await fetch('/api/google/status')
+    setGoogleStatus(await res.json())
+  }, [])
+
+  const loadNotionStatus = useCallback(async () => {
+    const res = await fetch('/api/notion/config')
+    const data = await res.json()
+    setNotionStatus(data)
+    setNotionDbId(data.databaseId ?? '')
+  }, [])
 
   useEffect(() => {
     fetch('/api/vapi/voices')
       .then(r => r.json())
       .then((v: VapiVoice[]) => { setVoices(v); setSelectedVoice(v[0] ?? null) })
       .finally(() => setLoadingVoices(false))
-  }, [])
+    loadGoogleStatus()
+    loadNotionStatus()
+  }, [loadGoogleStatus, loadNotionStatus])
+
+  // Si l'utilisateur vient de se connecter avec Google → stocker le statut
+  useEffect(() => {
+    if (session?.accessToken) loadGoogleStatus()
+  }, [session, loadGoogleStatus])
 
   const providers = ['all', ...Array.from(new Set(voices.map(v => v.provider)))]
   const filteredVoices = filterProvider === 'all' ? voices : voices.filter(v => v.provider === filterProvider)
 
-  const testSheets = async () => {
+  const loadUserSheets = async () => {
+    setSheetsLoading(true)
+    try {
+      const res = await fetch('/api/google/sheets')
+      const data = await res.json()
+      setUserSheets(data.sheets ?? [])
+    } finally {
+      setSheetsLoading(false)
+    }
+  }
+
+  const selectSheet = async (id: string) => {
     setSheetTestStatus('loading')
     try {
-      const res = await fetch('/api/sheets-test')
+      const res = await fetch('/api/google/sheets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spreadsheetId: id }),
+      })
       const data = await res.json()
       setSheetTestStatus(data.ok ? 'ok' : 'error')
       setSheetTestMsg(data.ok ? `Connecté : "${data.sheetTitle}"` : (data.error ?? 'Échec'))
+      loadGoogleStatus()
     } catch {
       setSheetTestStatus('error')
       setSheetTestMsg('Erreur réseau')
     }
+  }
+
+  const disconnectGoogle = async () => {
+    await fetch('/api/google/status', { method: 'DELETE' })
+    await signOut({ redirect: false })
+    loadGoogleStatus()
+  }
+
+  const saveNotion = async () => {
+    setNotionTestStatus('loading')
+    try {
+      await fetch('/api/notion/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: notionToken, databaseId: notionDbId }),
+      })
+      const res = await fetch('/api/notion/test')
+      const data = await res.json()
+      setNotionTestStatus(data.ok ? 'ok' : 'error')
+      setNotionTestMsg(data.ok ? `Connecté : "${data.dbName}"` : (data.error ?? 'Échec'))
+      loadNotionStatus()
+    } catch {
+      setNotionTestStatus('error')
+      setNotionTestMsg('Erreur réseau')
+    }
+  }
+
+  const disconnectNotion = async () => {
+    await fetch('/api/notion/config', { method: 'DELETE' })
+    setNotionToken('')
+    setNotionDbId('')
+    loadNotionStatus()
   }
 
   return (
@@ -146,17 +228,64 @@ export default function SettingsPage() {
       {/* ── TÉLÉPHONIE ── */}
       {tab === 'Téléphonie' && (
         <div className="space-y-4">
+          {/* Kavkom */}
+          <div className="card p-6 border-2 border-brand-100">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-brand-600 flex items-center justify-center">
+                <Phone size={18} className="text-white" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">Kavkom — Opérateur VoIP français</h3>
+                <a href="https://kavkom.com" target="_blank" rel="noopener" className="text-xs text-brand-600 flex items-center gap-1">kavkom.com <ExternalLink size={10} /></a>
+              </div>
+              <span className="ml-auto badge bg-brand-50 text-brand-700">Recommandé</span>
+            </div>
+            <p className="text-xs text-gray-500 mb-4">Kavkom est votre opérateur télécom. Configurez-le pour les appels sortants via son API REST.</p>
+
+            <div className="bg-brand-50 rounded-xl p-4 mb-4 text-xs text-gray-600 space-y-1.5">
+              <p className="font-semibold text-gray-800">Configuration Kavkom :</p>
+              <ol className="list-decimal list-inside space-y-1.5">
+                <li>Se connecter sur <strong>kavkom.com</strong> → Espace client → API</li>
+                <li>Générer une <strong>clé API</strong> + noter votre <strong>Account ID</strong></li>
+                <li>Récupérer votre <strong>numéro DID</strong> sortant (ex: +33 1 xx xx xx xx)</li>
+                <li>Configurer le webhook dans Kavkom → URL de callback</li>
+              </ol>
+            </div>
+
+            <div className="space-y-3">
+              {[
+                { label: 'Clé API Kavkom', env: 'KAVKOM_API_KEY', placeholder: 'xxxxxxxxxxxxxx' },
+                { label: 'Account ID', env: 'KAVKOM_ACCOUNT_ID', placeholder: 'ACC_xxxxxxxx' },
+                { label: 'Numéro DID sortant', env: 'KAVKOM_DID_NUMBER', placeholder: '+33123456789' },
+              ].map(f => (
+                <div key={f.env}>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">{f.label}</label>
+                  <input type="password" placeholder={f.placeholder} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                  <p className="text-[11px] text-gray-400 mt-0.5">Variable : <code className="bg-gray-100 px-1 rounded">{f.env}</code></p>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 p-3 bg-gray-50 rounded-xl">
+              <p className="text-xs font-medium text-gray-700 mb-1">Webhook Kavkom → CampagneIA</p>
+              <div className="bg-gray-900 rounded-lg px-3 py-2 font-mono text-xs text-emerald-400">
+                https://campagne-ia.vercel.app/api/kavkom/webhook
+              </div>
+              <p className="text-[11px] text-gray-400 mt-1">À configurer dans Kavkom → API → Callback URL</p>
+            </div>
+          </div>
+
           <div className="card p-6">
             <h3 className="text-sm font-semibold text-gray-800 mb-1 flex items-center gap-2">
-              <Phone size={16} className="text-brand-600" /> Opérateur téléphonique
+              <Phone size={16} className="text-brand-600" /> Vapi.ai — Voix IA sur Kavkom
             </h3>
-            <p className="text-xs text-gray-500 mb-5">Vapi.ai gère la téléphonie via Twilio ou Vonage. Vous n'avez <strong>pas besoin de compte SIP séparé</strong> — Vapi fournit les numéros de téléphone directement.</p>
+            <p className="text-xs text-gray-500 mb-5">Vapi.ai ajoute la couche voix IA par-dessus Kavkom. Vous pouvez aussi utiliser Vapi seul (il inclut sa propre téléphonie via Twilio).</p>
 
             <div className="bg-brand-50 rounded-xl p-4 mb-5 space-y-2 text-xs text-gray-700">
-              <p className="font-semibold text-gray-800">Configuration en 3 étapes :</p>
+              <p className="font-semibold text-gray-800">Configuration Vapi.ai :</p>
               <ol className="list-decimal list-inside space-y-2 text-gray-600">
                 <li>Créer un compte sur <strong>vapi.ai</strong> → obtenir votre clé API</li>
-                <li>Dans Vapi Dashboard → <strong>Phone Numbers</strong> → acheter ou importer un numéro français (+33)</li>
+                <li>Dans Vapi Dashboard → <strong>Phone Numbers</strong> → importer votre numéro Kavkom <em>ou</em> acheter un numéro Vapi</li>
                 <li>Copier le <strong>Phone Number ID</strong> dans les variables ci-dessous</li>
               </ol>
             </div>
@@ -202,53 +331,202 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* ── GOOGLE SHEETS ── */}
-      {tab === 'Google Sheets' && (
+      {/* ── GOOGLE ── */}
+      {tab === 'Google' && (
+        <div className="space-y-4">
+          {/* Connexion Google OAuth */}
+          <div className="card p-6">
+            <h3 className="text-sm font-semibold text-gray-800 mb-1 flex items-center gap-2">
+              <svg className="w-4 h-4" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+              Compte Google
+            </h3>
+            <p className="text-xs text-gray-500 mb-4">Connectez votre compte Google pour autoriser l'accès à Google Sheets sans configuration technique.</p>
+
+            {googleStatus?.connected ? (
+              <div className="space-y-4">
+                <div className="flex items-center gap-3 p-4 bg-emerald-50 rounded-xl border border-emerald-100">
+                  <CheckCircle2 size={20} className="text-emerald-600 flex-shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-gray-800">Compte Google connecté</p>
+                    <p className="text-xs text-gray-500">{googleStatus.email}</p>
+                  </div>
+                  <button onClick={disconnectGoogle} className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-600 bg-red-50 hover:bg-red-100 rounded-lg">
+                    <LogOut size={12} /> Déconnecter
+                  </button>
+                </div>
+
+                {/* Sélecteur de Google Sheet */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-medium text-gray-700">Google Sheet cible pour les leads</label>
+                    <button onClick={loadUserSheets} disabled={sheetsLoading} className="flex items-center gap-1 text-xs text-brand-600 hover:underline">
+                      {sheetsLoading ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+                      Rafraîchir
+                    </button>
+                  </div>
+
+                  {googleStatus.spreadsheetId && (
+                    <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-emerald-50 rounded-lg">
+                      <CheckCircle2 size={13} className="text-emerald-600" />
+                      <span className="text-xs text-emerald-700 font-medium">Sheet actuel : {googleStatus.spreadsheetId}</span>
+                    </div>
+                  )}
+
+                  {userSheets.length > 0 ? (
+                    <div className="space-y-2">
+                      {userSheets.map(s => (
+                        <button
+                          key={s.id}
+                          onClick={() => selectSheet(s.id)}
+                          className={clsx(
+                            'w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 text-left transition-all text-sm',
+                            googleStatus.spreadsheetId === s.id
+                              ? 'border-emerald-400 bg-emerald-50'
+                              : 'border-gray-200 hover:border-gray-300'
+                          )}
+                        >
+                          <div className="flex items-center gap-2">
+                            <Sheet size={15} className="text-emerald-600" />
+                            <span className="font-medium text-gray-800">{s.name}</span>
+                          </div>
+                          {googleStatus.spreadsheetId === s.id && <CheckCircle2 size={15} className="text-emerald-600" />}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <button onClick={loadUserSheets} className="w-full py-3 border-2 border-dashed border-gray-200 rounded-xl text-sm text-gray-400 hover:border-gray-300">
+                      {sheetsLoading ? 'Chargement...' : 'Cliquer pour charger vos Google Sheets'}
+                    </button>
+                  )}
+
+                  {sheetTestMsg && (
+                    <p className={clsx('text-xs mt-2 flex items-center gap-1', sheetTestStatus === 'ok' ? 'text-emerald-600' : 'text-red-500')}>
+                      {sheetTestStatus === 'ok' ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
+                      {sheetTestMsg}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="text-center py-6">
+                <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
+                  <Sheet size={24} className="text-gray-400" />
+                </div>
+                <p className="text-sm text-gray-600 mb-4">Connectez votre compte Google pour exporter automatiquement les leads dans vos Sheets.</p>
+                <button
+                  onClick={() => signIn('google', { callbackUrl: '/settings' })}
+                  className="flex items-center gap-3 px-6 py-3 bg-white border-2 border-gray-200 rounded-xl hover:border-gray-300 hover:bg-gray-50 transition-all mx-auto text-sm font-medium text-gray-700"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                  Se connecter avec Google
+                </button>
+                <p className="text-[11px] text-gray-400 mt-3">Requiert : GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET dans Vercel</p>
+              </div>
+            )}
+          </div>
+
+          <div className="card p-6">
+            <h3 className="text-sm font-semibold text-gray-800 mb-3">Variables Vercel nécessaires</h3>
+            <div className="bg-gray-900 rounded-xl p-4 font-mono text-xs text-green-400 space-y-1">
+              <p><span className="text-gray-500"># Google OAuth (console.cloud.google.com)</span></p>
+              <p>GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com</p>
+              <p>GOOGLE_CLIENT_SECRET=GOCSPX-xxx</p>
+              <p>NEXTAUTH_SECRET=une-chaine-aleatoire-securisee</p>
+              <p>NEXTAUTH_URL=https://campagne-ia.vercel.app</p>
+            </div>
+            <p className="text-[11px] text-gray-400 mt-2">
+              Dans Google Cloud Console → APIs → Credentials → OAuth 2.0 → Authorized redirect URIs → ajouter :<br />
+              <code className="bg-gray-100 px-1 rounded">https://campagne-ia.vercel.app/api/auth/callback/google</code>
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── NOTION ── */}
+      {tab === 'Notion' && (
         <div className="space-y-4">
           <div className="card p-6">
             <h3 className="text-sm font-semibold text-gray-800 mb-1 flex items-center gap-2">
-              <Sheet size={16} className="text-emerald-600" /> Connexion Google Sheets
+              <BookOpen size={16} className="text-gray-800" /> Connexion Notion
             </h3>
-            <p className="text-xs text-gray-500 mb-5">Les leads convertis arrivent automatiquement dans votre Google Sheet, un onglet par campagne.</p>
+            <p className="text-xs text-gray-500 mb-4">
+              Les leads convertis sont automatiquement envoyés dans une base de données Notion. Chaque appel converti crée une nouvelle entrée.
+            </p>
 
-            <div className="bg-brand-50 rounded-xl p-4 mb-5 space-y-1 text-xs text-gray-600">
-              <p className="font-semibold text-gray-800 mb-2">Configuration :</p>
+            {notionStatus?.connected && (
+              <div className="flex items-center gap-3 p-3 bg-emerald-50 rounded-xl border border-emerald-100 mb-4">
+                <CheckCircle2 size={16} className="text-emerald-600" />
+                <span className="text-sm text-emerald-700 font-medium">Notion connecté</span>
+                <button onClick={disconnectNotion} className="ml-auto flex items-center gap-1 text-xs text-red-600 hover:underline">
+                  <LogOut size={11} /> Déconnecter
+                </button>
+              </div>
+            )}
+
+            <div className="bg-brand-50 rounded-xl p-4 mb-5 text-xs text-gray-600 space-y-1.5">
+              <p className="font-semibold text-gray-800">Configuration en 4 étapes :</p>
               <ol className="list-decimal list-inside space-y-1.5">
-                <li>Aller sur <strong>console.cloud.google.com</strong> → Nouveau projet</li>
-                <li>Activer l'API <strong>Google Sheets</strong></li>
-                <li>IAM → Compte de service → Créer → Télécharger le JSON</li>
-                <li>Partager votre Google Sheet avec l'email du compte de service</li>
-                <li>Renseigner les variables d'env ci-dessous dans Vercel</li>
+                <li>Aller sur <a href="https://notion.so/my-integrations" target="_blank" rel="noopener" className="text-brand-600 underline">notion.so/my-integrations</a> → Nouvelle intégration</li>
+                <li>Copier le <strong>Token d'intégration</strong> (commence par <code>secret_</code>)</li>
+                <li>Dans Notion, ouvrir votre base de données → ⋯ → Connexions → Ajouter l'intégration</li>
+                <li>Copier l'<strong>ID de la base</strong> depuis l'URL : notion.so/xxx/<strong>CECI-EST-L-ID</strong>?v=...</li>
               </ol>
             </div>
 
             <div className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">ID du Spreadsheet</label>
-                <div className="flex gap-2">
-                  <input className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500" placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms" value={spreadsheetId} onChange={e => setSpreadsheetId(e.target.value)} />
-                  <button onClick={testSheets} disabled={sheetTestStatus === 'loading'} className="flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-                    {sheetTestStatus === 'loading' && <Loader2 size={14} className="animate-spin" />}
-                    {sheetTestStatus === 'ok' && <CheckCircle2 size={14} className="text-emerald-600" />}
-                    {sheetTestStatus === 'error' && <XCircle size={14} className="text-red-500" />}
-                    {sheetTestStatus === 'idle' && <Sheet size={14} />}
-                    Tester
-                  </button>
-                </div>
-                {sheetTestMsg && (
-                  <p className={clsx('text-xs mt-1.5 flex items-center gap-1', sheetTestStatus === 'ok' ? 'text-emerald-600' : 'text-red-500')}>
-                    {sheetTestStatus === 'ok' ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
-                    {sheetTestMsg}
-                  </p>
-                )}
+                <label className="block text-xs font-medium text-gray-700 mb-1">Token d'intégration Notion</label>
+                <input
+                  type="password"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  placeholder="secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                  value={notionToken}
+                  onChange={e => setNotionToken(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">ID de la base de données</label>
+                <input
+                  type="text"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                  value={notionDbId}
+                  onChange={e => setNotionDbId(e.target.value)}
+                />
               </div>
 
-              <div className="bg-gray-900 rounded-xl p-4 font-mono text-xs text-green-400 space-y-1">
-                <p><span className="text-gray-500"># Google Sheets</span></p>
-                <p>GOOGLE_SERVICE_ACCOUNT_EMAIL=xxx@projet.iam.gserviceaccount.com</p>
-                <p>GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n..."</p>
-                <p>GOOGLE_SPREADSHEET_ID={spreadsheetId || '<votre-id>'}</p>
-              </div>
+              <button
+                onClick={saveNotion}
+                disabled={notionTestStatus === 'loading' || !notionToken || !notionDbId}
+                className="flex items-center gap-2 px-5 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 disabled:opacity-50"
+              >
+                {notionTestStatus === 'loading' ? <Loader2 size={14} className="animate-spin" /> : <BookOpen size={14} />}
+                Connecter Notion
+              </button>
+
+              {notionTestMsg && (
+                <p className={clsx('text-xs flex items-center gap-1', notionTestStatus === 'ok' ? 'text-emerald-600' : 'text-red-500')}>
+                  {notionTestStatus === 'ok' ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
+                  {notionTestMsg}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="card p-6">
+            <h3 className="text-sm font-semibold text-gray-800 mb-3">Colonnes auto-créées dans Notion</h3>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              {[
+                ['Nom','Titre'], ['Téléphone','Téléphone'], ['Email','Email'],
+                ['Entreprise','Texte'], ['Segment','Sélection'], ['Campagne','Sélection'],
+                ['Statut','Sélection'], ['Sentiment','Sélection'], ['Durée (s)','Nombre'],
+                ['Notes','Texte'], ['Date','Date'],
+              ].map(([col, type]) => (
+                <div key={col} className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-lg">
+                  <span className="font-medium text-gray-700">{col}</span>
+                  <span className="text-gray-400">{type}</span>
+                </div>
+              ))}
             </div>
           </div>
         </div>

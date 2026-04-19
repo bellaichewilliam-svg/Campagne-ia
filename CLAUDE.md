@@ -27,8 +27,11 @@ CRM full-stack de campagnes marketing **voix IA** permettant de :
 | Graphiques | Recharts |
 | Icônes | Lucide React |
 | Base de données | Supabase (PostgreSQL) |
-| Voix IA + Téléphonie | Vapi.ai (voix, appels, webhook) |
-| Google Sheets | googleapis (google-auth-library) |
+| Auth + Google OAuth | NextAuth.js (Google Provider) |
+| Voix IA | Vapi.ai (voix ElevenLabs/OpenAI/Azure + webhook) |
+| Téléphonie | Kavkom (opérateur VoIP FR) + Vapi |
+| Google Sheets | OAuth2 via compte Google (pas de service account) |
+| Notion | @notionhq/client (push leads) |
 | Hébergement | Vercel |
 
 ---
@@ -56,7 +59,14 @@ src/
 │       ├── calls/route.ts             # GET/POST appels
 │       ├── retargeting/route.ts       # GET/POST/PATCH règles
 │       ├── knowledge/route.ts         # GET/POST/PATCH/DELETE base de conn.
-│       ├── leads/route.ts             # POST → push Google Sheets
+│       ├── auth/[...nextauth]/route.ts # NextAuth Google OAuth
+│       ├── google/status/route.ts     # GET/DELETE statut connexion Google
+│       ├── google/sheets/route.ts     # GET liste sheets / POST sélection
+│       ├── notion/config/route.ts     # GET/POST/DELETE config Notion
+│       ├── notion/test/route.ts       # GET test connexion Notion
+│       ├── kavkom/webhook/route.ts    # POST webhook Kavkom
+│       ├── kavkom/test/route.ts       # GET test connexion Kavkom
+│       ├── leads/route.ts             # POST → Google Sheets + Notion
 │       ├── sheets-test/route.ts       # GET → test connexion Sheets
 │       └── vapi/
 │           ├── voices/route.ts        # GET liste des voix disponibles
@@ -165,15 +175,25 @@ NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
 SUPABASE_SERVICE_ROLE_KEY=eyJ...
 
+# NextAuth + Google OAuth (console.cloud.google.com)
+GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-xxx
+NEXTAUTH_SECRET=une-chaine-aleatoire-32-chars
+NEXTAUTH_URL=https://campagne-ia.vercel.app
+
 # Vapi.ai
 VAPI_API_KEY=vapi_xxx
 VAPI_PHONE_NUMBER_ID=uuid
 VAPI_ASSISTANT_ID=uuid (optionnel)
 
-# Google Sheets
-GOOGLE_SERVICE_ACCOUNT_EMAIL=xxx@projet.iam.gserviceaccount.com
-GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n..."
-GOOGLE_SPREADSHEET_ID=xxx
+# Kavkom (opérateur VoIP FR — kavkom.com)
+KAVKOM_API_KEY=xxx
+KAVKOM_ACCOUNT_ID=ACC_xxx
+KAVKOM_DID_NUMBER=+33xxxxxxxxx
+
+# Notion (optionnel — notion.so/my-integrations)
+NOTION_TOKEN=secret_xxx
+NOTION_DATABASE_ID=xxx
 
 # App
 NEXT_PUBLIC_APP_URL=https://campagne-ia.vercel.app
@@ -208,3 +228,4 @@ npm run lint      # ESLint
 | 2026-04-19 | CLAUDE.md, Google Sheets service, base de connaissances voix IA, page /knowledge |
 | 2026-04-19 | Déploiement Vercel : https://campagne-ia.vercel.app |
 | 2026-04-19 | Refonte complète : Supabase (DB réelle), Vapi.ai (voix + téléphonie + webhook), CRUD complet, données temps réel |
+| 2026-04-19 | Google OAuth (NextAuth), Notion (push leads), Kavkom (opérateur VoIP FR), Google Sheets sans service account |
