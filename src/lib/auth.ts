@@ -28,14 +28,14 @@ export const authOptions: AuthOptions = {
 
   callbacks: {
     // Stocker les tokens Google dans Supabase à la connexion
-    async signIn({ account }) {
+    async signIn({ user, account }) {
       if (account?.provider === 'google' && account.refresh_token) {
         await supabaseAdmin.from('settings').upsert([
           { key: 'google_access_token',  value: account.access_token  ?? '' },
           { key: 'google_refresh_token', value: account.refresh_token ?? '' },
           { key: 'google_token_expiry',  value: String(account.expires_at ?? 0) },
           { key: 'google_connected',     value: 'true' },
-          { key: 'google_email',         value: account.email ?? '' },
+          { key: 'google_email',         value: user?.email ?? '' },
         ], { onConflict: 'key' })
       }
       return true
