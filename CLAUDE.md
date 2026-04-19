@@ -217,7 +217,7 @@ VAPI_API_KEY=
 VAPI_ASSISTANT_ID=
 
 # App
-NEXT_PUBLIC_APP_URL=http://localhost:3000
+NEXT_PUBLIC_APP_URL=https://campagne-ia.vercel.app
 ```
 
 ---
@@ -228,6 +228,7 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 |------|-------------|
 | 2026-04-19 | Création initiale du projet : dashboard, campagnes, contacts, appels, retargeting, rapports, paramètres |
 | 2026-04-19 | Ajout CLAUDE.md, intégration Google Sheets (service + API route), base de connaissances voix IA, page /knowledge |
+| 2026-04-19 | Déploiement Vercel production : https://campagne-ia.vercel.app |
 
 ---
 
