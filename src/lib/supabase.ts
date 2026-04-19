@@ -1,14 +1,15 @@
 import { createClient } from '@supabase/supabase-js'
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+// Valeurs par défaut pour que le build passe sans env vars (runtime échouera proprement)
+const url       = process.env.NEXT_PUBLIC_SUPABASE_URL      ?? 'https://placeholder.supabase.co'
+const anonKey   = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? 'placeholder-anon-key'
+const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY     ?? anonKey
 
 // Client côté navigateur (lecture publique)
 export const supabase = createClient(url, anonKey)
 
 // Client côté serveur (routes API) — contourne RLS
-export const supabaseAdmin = createClient(url, serviceKey ?? anonKey)
+export const supabaseAdmin = createClient(url, serviceKey)
 
 // ─── Types ────────────────────────────────────────────────
 
