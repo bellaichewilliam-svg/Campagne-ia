@@ -1,51 +1,106 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { searchKnowledge, defaultKnowledge } from '@/lib/voiceKnowledge'
+import { supabaseAdmin } from '@/lib/supabase'
 
 /**
  * GET /api/knowledge?query=xxx&campaignId=yyy&limit=3
- * Appelé par le webhook Vapi.ai avant chaque appel pour injecter le contexte IA.
+ * Webhook Vapi.ai — retourne le contexte IA selon la question de l'appelant.
  */
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
-  const query = searchParams.get('query') ?? ''
+  const query = (searchParams.get('query') ?? '').toLowerCase()
   const campaignId = searchParams.get('campaignId') ?? undefined
   const limit = parseInt(searchParams.get('limit') ?? '3', 10)
 
-  const results = searchKnowledge(defaultKnowledge, query, campaignId, limit)
+  const { data: entries, error } = await supabaseAdmin
+    .from('knowledge_base')
+    .select('*')
+    .eq('active', true)
+    .order('priority', { ascending: true })
 
-  const context = results
-    .map(e => `[${e.category.toUpperCase()}] ${e.title}\n${e.content}`)
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // Filtrer par campagne
+  const relevant = (entries ?? []).filter((e: { campaigns: string[] }) =>
+    !e.campaigns?.length || (campaignId && e.campaigns.includes(campaignId))
+  )
+
+  // Scorer par pertinence
+  const scored = relevant
+    .map((e: { title: string; content: string; tags: string[]; priority: number }) => {
+      let score = 0
+      if (query) {
+        if (e.title.toLowerCase().includes(query)) score += 10
+        if (e.content.toLowerCase().includes(query)) score += 5
+        if (e.tags?.some((t: string) => t.includes(query))) score += 8
+      }
+      score += (4 - (e.priority ?? 2)) * 2
+      return { entry: e, score }
+    })
+    .filter((s: { score: number }) => !query || s.score > 0)
+    .sort((a: { score: number }, b: { score: number }) => b.score - a.score)
+    .slice(0, limit)
+    .map((s: { entry: unknown }) => s.entry)
+
+  const context = scored
+    .map((e: { category: string; title: string; content: string }) => `[${e.category?.toUpperCase()}] ${e.title}\n${e.content}`)
     .join('\n\n---\n\n')
 
-  return NextResponse.json({
-    query,
-    campaignId,
-    count: results.length,
-    context,
-    entries: results,
-  })
+  return NextResponse.json({ query, campaignId, count: scored.length, context, entries: scored })
 }
 
-/**
- * POST /api/knowledge
- * Vapi webhook — reçoit l'intent de l'appelant et retourne le contexte approprié.
- */
 export async function POST(req: NextRequest) {
-  try {
-    const body = await req.json()
-    const { message, call } = body
+  const body = await req.json()
 
-    const query: string = message?.content ?? message?.transcript ?? ''
-    const campaignId: string | undefined = call?.metadata?.campaignId
+  // Webhook Vapi — reçoit l'intent et retourne le contexte
+  if (body.message !== undefined) {
+    const query = (body.message?.content ?? body.message?.transcript ?? '').toLowerCase()
+    const campaignId = body.call?.metadata?.campaignId
 
-    const results = searchKnowledge(defaultKnowledge, query, campaignId, 3)
-    const context = results.map(e => `${e.title}: ${e.content}`).join('\n\n')
+    const { data: entries } = await supabaseAdmin
+      .from('knowledge_base')
+      .select('*')
+      .eq('active', true)
+      .order('priority', { ascending: true })
+      .limit(10)
 
-    return NextResponse.json({
-      context,
-      entries: results.map(e => ({ id: e.id, title: e.title, category: e.category })),
-    })
-  } catch {
-    return NextResponse.json({ error: 'Requête invalide' }, { status: 400 })
+    const relevant = (entries ?? [])
+      .filter((e: { campaigns: string[] }) => !e.campaigns?.length || (campaignId && e.campaigns.includes(campaignId)))
+      .slice(0, 3)
+
+    const context = relevant
+      .map((e: { title: string; content: string }) => `${e.title}: ${e.content}`)
+      .join('\n\n')
+
+    return NextResponse.json({ context, entries: relevant.map((e: { id: string; title: string; category: string }) => ({ id: e.id, title: e.title, category: e.category })) })
   }
+
+  // CRUD — créer une entrée
+  const { data, error } = await supabaseAdmin
+    .from('knowledge_base')
+    .insert({ ...body, created_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .select()
+    .single()
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json(data, { status: 201 })
+}
+
+export async function PATCH(req: NextRequest) {
+  const { id, ...body } = await req.json()
+  const { data, error } = await supabaseAdmin
+    .from('knowledge_base')
+    .update({ ...body, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single()
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json(data)
+}
+
+export async function DELETE(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get('id')
+  if (!id) return NextResponse.json({ error: 'id requis' }, { status: 400 })
+  const { error } = await supabaseAdmin.from('knowledge_base').delete().eq('id', id)
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json({ ok: true })
 }

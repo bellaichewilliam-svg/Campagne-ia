@@ -1,0 +1,33 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { supabaseAdmin } from '@/lib/supabase'
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const status = searchParams.get('status')
+  const campaignId = searchParams.get('campaign_id')
+  const limit = parseInt(searchParams.get('limit') ?? '100', 10)
+
+  let query = supabaseAdmin
+    .from('call_logs')
+    .select('*')
+    .order('called_at', { ascending: false })
+    .limit(limit)
+
+  if (status && status !== 'all') query = query.eq('status', status)
+  if (campaignId) query = query.eq('campaign_id', campaignId)
+
+  const { data, error } = await query
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json(data)
+}
+
+export async function POST(req: NextRequest) {
+  const body = await req.json()
+  const { data, error } = await supabaseAdmin
+    .from('call_logs')
+    .insert({ ...body, called_at: new Date().toISOString() })
+    .select()
+    .single()
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json(data, { status: 201 })
+}

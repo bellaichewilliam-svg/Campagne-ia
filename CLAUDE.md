@@ -8,7 +8,7 @@
 ## Vue d'ensemble
 
 CRM full-stack de campagnes marketing **voix IA** permettant de :
-- Lancer des campagnes d'appels automatisés via voix IA
+- Lancer des campagnes d'appels automatisés via voix IA (Vapi.ai)
 - Gérer les contacts et leur cycle de vie (prospect → client)
 - Suivre en temps réel les taux d'ouverture, de réponse et de conversion
 - Retargeter automatiquement selon des règles déclencheur/délai
@@ -26,9 +26,10 @@ CRM full-stack de campagnes marketing **voix IA** permettant de :
 | Style | Tailwind CSS v3 |
 | Graphiques | Recharts |
 | Icônes | Lucide React |
+| Base de données | Supabase (PostgreSQL) |
+| Voix IA + Téléphonie | Vapi.ai (voix, appels, webhook) |
 | Google Sheets | googleapis (google-auth-library) |
-| Voix IA | Vapi.ai (webhook + knowledge base) |
-| Date | date-fns |
+| Hébergement | Vercel |
 
 ---
 
@@ -37,184 +38,142 @@ CRM full-stack de campagnes marketing **voix IA** permettant de :
 ```
 src/
 ├── app/
-│   ├── page.tsx                  # Tableau de bord (KPIs, graphiques)
-│   ├── campaigns/page.tsx        # Gestion campagnes + wizard création
-│   ├── contacts/page.tsx         # CRM contacts, table, sélection, import
-│   ├── calls/page.tsx            # Journal appels, transcriptions, sentiment
-│   ├── retargeting/page.tsx      # Règles retargeting automatique
-│   ├── reports/page.tsx          # Rapports détaillés + export PDF
-│   ├── knowledge/page.tsx        # Base de connaissances voix IA
-│   ├── settings/page.tsx         # Config voix, Google Sheets, API, notifs
-│   ├── globals.css               # Styles globaux + classes utilitaires
-│   ├── layout.tsx                # Layout racine (Sidebar + main)
+│   ├── page.tsx                      # Tableau de bord (KPIs, graphiques)
+│   ├── campaigns/page.tsx            # Campagnes CRUD + launch Vapi
+│   ├── contacts/page.tsx             # CRM contacts CRUD
+│   ├── calls/page.tsx                # Journal appels temps réel
+│   ├── retargeting/page.tsx          # Règles retargeting
+│   ├── reports/page.tsx              # Rapports analytics
+│   ├── knowledge/page.tsx            # Base de connaissances voix IA
+│   ├── settings/page.tsx             # Config voix, téléphonie, Sheets, API
+│   ├── globals.css
+│   ├── layout.tsx
 │   └── api/
-│       ├── leads/route.ts        # POST /api/leads → push Google Sheets
-│       └── knowledge/route.ts    # GET/POST base de connaissances
+│       ├── campaigns/route.ts         # GET/POST campagnes
+│       ├── campaigns/[id]/route.ts    # GET/PATCH/DELETE campagne
+│       ├── contacts/route.ts          # GET/POST contacts
+│       ├── contacts/[id]/route.ts     # PATCH/DELETE contact
+│       ├── calls/route.ts             # GET/POST appels
+│       ├── retargeting/route.ts       # GET/POST/PATCH règles
+│       ├── knowledge/route.ts         # GET/POST/PATCH/DELETE base de conn.
+│       ├── leads/route.ts             # POST → push Google Sheets
+│       ├── sheets-test/route.ts       # GET → test connexion Sheets
+│       └── vapi/
+│           ├── voices/route.ts        # GET liste des voix disponibles
+│           ├── launch/route.ts        # POST → lance les appels Vapi
+│           └── webhook/route.ts       # POST → reçoit events Vapi
 ├── components/
-│   ├── Sidebar.tsx               # Navigation latérale
-│   ├── PageHeader.tsx            # En-tête de page standard
-│   └── StatCard.tsx              # Carte KPI avec delta
+│   ├── Sidebar.tsx
+│   ├── PageHeader.tsx
+│   └── StatCard.tsx
 └── lib/
-    ├── mockData.ts               # Données de démonstration (campagnes, contacts, appels)
-    ├── googleSheets.ts           # Service Google Sheets API v4
-    └── voiceKnowledge.ts         # Gestion base de connaissances voix IA
+    ├── supabase.ts        # Client Supabase + types TypeScript
+    ├── vapi.ts            # Service Vapi.ai (voix, calls, webhook parser)
+    ├── googleSheets.ts    # Service Google Sheets API v4
+    └── voiceKnowledge.ts  # Fallback knowledge si Supabase indisponible
+supabase/
+└── schema.sql             # Schéma PostgreSQL complet à coller dans Supabase
 ```
 
 ---
 
-## Pages et fonctionnalités
+## Flux complet d'un appel
 
-### `/` — Tableau de bord
-- KPIs : appels aujourd'hui, taux de réponse, conversions, contacts actifs
-- Graphique barres : appels/réponses/conversions par jour de semaine
-- Graphique donut : sentiment des appels (positif/neutre/négatif)
-- Liste campagnes actives avec taux de conversion
-- Flux des derniers appels en temps réel
+```
+1. Création campagne  →  POST /api/campaigns  →  Supabase
+2. Ajout contacts     →  POST /api/contacts   →  Supabase
+3. Lancement          →  POST /api/vapi/launch
+       → createVapiAssistant (script + knowledge base injectée)
+       → launchCall pour chaque contact (Vapi API)
+       → call_logs enregistré en Supabase (status: no_answer)
+4. Appel en cours     →  Webhook POST /api/vapi/webhook
+       → type=call-started  → status: answered
+       → type=call-ended    → duration, transcript, sentiment, recording_url
+                            → mise à jour score contact
+                            → si converti → POST /api/leads → Google Sheets
+5. Consultation       →  Pages calls, reports avec données Supabase réelles
+```
 
-### `/campaigns` — Campagnes
-- Liste filtrée par statut (actif/pause/terminé/brouillon)
-- Barres de progression : contacts appelés, taux d'ouverture, conversion
-- Actions : pause/reprendre/voir détails
-- **Wizard création 3 étapes** : Config (nom, type, voix) → Script (avec variables `{{prénom}}`) → Ciblage (segments, date, limite quotidienne)
+---
 
-### `/contacts` — CRM
-- Table avec : nom, email, entreprise, segment, statut, score lead (/100)
-- Sélection multiple → ajouter à une campagne
-- Filtres : tous / client / lead / prospect / inactif
-- Ajout manuel + import CSV
-- Score coloré : vert ≥80 / jaune ≥50 / rouge <50
+## Intégration Vapi.ai
 
-### `/calls` — Journal des appels
-- Filtres par statut : converti / répondu / messagerie / sans réponse / occupé
-- Sentiment par appel (positif/neutre/négatif)
-- Modal transcription IA
-- Bouton écoute enregistrement
+### Connexion téléphonique
+- **Pas besoin de compte SIP** — Vapi.ai fournit la téléphonie via Twilio/Vonage
+- Achat d'un numéro français (+33) directement dans Vapi Dashboard → Phone Numbers
+- `VAPI_PHONE_NUMBER_ID` = l'ID du numéro acheté
 
-### `/retargeting` — Retargeting automatique
-- Règles : déclencheur (ex: pas de réponse 24h) + délai + script dédié
-- Toggle actif/pause par règle
-- Progression des envois par règle
+### Voix disponibles (src/lib/vapi.ts)
+- **ElevenLabs** : Rachel, Domi, Bella, Antoni, Elli, Josh, Arnold, Adam, Sam
+- **OpenAI TTS** : Alloy, Echo, Fable, Onyx, Nova, Shimmer
+- **Azure Neural** : Denise, Henri, Yvette, Alain, Brigitte (fr-FR)
 
-### `/reports` — Rapports
-- Taux d'ouverture par campagne (graphique horizontal)
-- Entonnoir de conversion : Contacts → Appelés → Réponses → Intéressés → Convertis
-- Évolution mensuelle (aire chart)
-- Meilleures heures d'appel (heatmap barres)
-- Performance par voix IA (appels, conversion, satisfaction)
-- Export PDF
+### Webhook
+URL à configurer dans Vapi Dashboard → Settings → Server URL :
+`https://campagne-ia.vercel.app/api/vapi/webhook`
 
-### `/knowledge` — Base de connaissances voix IA
-- Gestion des entrées FAQ, produits, objections, infos entreprise
-- Catégories : FAQ / Produit / Objections / Entreprise / Script
-- Recherche full-text dans la base
-- Statut actif/inactif par entrée
-- Assignation à une ou plusieurs campagnes
-
-### `/settings` — Paramètres
-- **Voix IA** : sélection, vitesse, tonalité, test audio
-- **Google Sheets** : ID du spreadsheet, onglet cible par campagne, colonnes, test connexion
-- **Intégrations API** : clé API, webhook URL, HubSpot/Salesforce/Zapier/Make/Slack
-- **Notifications** : campagne terminée, taux anormal, rapport hebdomadaire
-- **Général** : organisation, email, fuseau horaire, plages horaires d'appel
+Événements gérés : `call-started`, `call-ended`, `transcript`
 
 ---
 
 ## Intégration Google Sheets
 
-### Configuration (Settings → Google Sheets)
-1. Créer un projet Google Cloud Console
-2. Activer l'API Google Sheets
-3. Créer un compte de service → télécharger le JSON
-4. Partager le Google Sheet avec l'email du compte de service
-5. Coller le `spreadsheet_id` dans les paramètres
-
-### Flux de données
+### Flux
 ```
-Appel converti
-  → POST /api/leads { campaignId, contactData, callData }
+Appel converti (webhook call-ended + interested=true)
+  → POST /api/leads { campaignName, contact, call }
   → src/lib/googleSheets.ts → appendLead()
-  → Google Sheets API v4 → spreadsheets.values.append
-  → Onglet "{nom_campagne}" du spreadsheet configuré
+  → Onglet "{NomCampagne}" créé auto avec en-têtes
+  → Colonnes : Date | Prénom | Nom | Téléphone | Email | Entreprise | Segment | Campagne | Statut | Durée | Sentiment | Notes
 ```
 
-### Colonnes auto-générées par onglet
-`Date | Prénom | Nom | Téléphone | Email | Entreprise | Segment | Campagne | Statut appel | Durée | Sentiment | Notes`
-
-### Variables d'environnement requises
+### Variables requises
 ```env
 GOOGLE_SERVICE_ACCOUNT_EMAIL=xxx@projet.iam.gserviceaccount.com
 GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n..."
-GOOGLE_SPREADSHEET_ID=1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms
+GOOGLE_SPREADSHEET_ID=<id-du-sheet>
 ```
 
 ---
 
-## Base de connaissances Voix IA
+## Base de données Supabase
 
-### Principe
-La voix IA (Vapi.ai) consulte la base de connaissances lors de chaque appel pour :
-- Répondre aux questions sur les produits/services
-- Gérer les objections avec les scripts appropriés
-- Utiliser les informations de l'entreprise
-- Adapter le discours par campagne
+### Tables
+| Table | Rôle |
+|-------|------|
+| `campaigns` | Campagnes avec stats agrégées |
+| `contacts` | CRM contacts avec score |
+| `campaign_contacts` | Liaison M2M campagne ↔ contact |
+| `call_logs` | Journal appels (vapi_call_id, transcript, recording_url) |
+| `retargeting_rules` | Règles de relance automatique |
+| `knowledge_base` | Base de connaissances voix IA |
+| `settings` | Paramètres de l'application |
 
-### Structure d'une entrée
-```typescript
-{
-  id: string
-  category: 'faq' | 'product' | 'objection' | 'company' | 'script'
-  title: string        // Question ou titre court
-  content: string      // Réponse complète que la voix doit donner
-  campaigns: string[]  // Campagnes où cette entrée est active ([] = toutes)
-  active: boolean
-  priority: number     // 1 (haute) à 3 (basse)
-  createdAt: string
-  updatedAt: string
-}
-```
-
-### Intégration Vapi.ai
-- Webhook `POST /api/knowledge?query=xxx&campaignId=yyy`
-- Retourne les 3 meilleures entrées correspondantes (recherche par mot-clé)
-- Vapi les injecte dans le contexte système de l'IA avant chaque appel
+### Setup
+1. Créer un projet sur supabase.com
+2. Éditeur SQL → coller `supabase/schema.sql` → Exécuter
+3. Settings → API → copier URL + anon key + service_role key
+4. Ajouter dans Vercel Environment Variables
 
 ---
 
-## Données de démonstration (mockData.ts)
-
-| Entité | Quantité | Détails |
-|--------|----------|---------|
-| Campaigns | 6 | mix actif/pause/terminé/brouillon |
-| Contacts | 8 | mix client/lead/prospect/inactif avec scores |
-| CallLogs | 8 | mix statuts + transcriptions |
-| RetargetingRules | 4 | règles types réelles |
-| WeeklyCallData | 7 jours | appels/réponses/conversions |
-| MonthlyData | 4 mois | Jan–Avr 2026 |
-| SentimentData | 3 catégories | positif 48% / neutre 35% / négatif 17% |
-
----
-
-## Commandes utiles
-
-```bash
-npm run dev       # Lancer en développement (http://localhost:3000)
-npm run build     # Build production
-npm run lint      # Vérification ESLint
-```
-
----
-
-## Variables d'environnement (.env.local)
+## Variables d'environnement complètes
 
 ```env
-# Google Sheets
-GOOGLE_SERVICE_ACCOUNT_EMAIL=
-GOOGLE_PRIVATE_KEY=
-GOOGLE_SPREADSHEET_ID=
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
+SUPABASE_SERVICE_ROLE_KEY=eyJ...
 
-# Vapi.ai Voice AI
-VAPI_API_KEY=
-VAPI_ASSISTANT_ID=
+# Vapi.ai
+VAPI_API_KEY=vapi_xxx
+VAPI_PHONE_NUMBER_ID=uuid
+VAPI_ASSISTANT_ID=uuid (optionnel)
+
+# Google Sheets
+GOOGLE_SERVICE_ACCOUNT_EMAIL=xxx@projet.iam.gserviceaccount.com
+GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n..."
+GOOGLE_SPREADSHEET_ID=xxx
 
 # App
 NEXT_PUBLIC_APP_URL=https://campagne-ia.vercel.app
@@ -222,20 +181,30 @@ NEXT_PUBLIC_APP_URL=https://campagne-ia.vercel.app
 
 ---
 
+## Commandes utiles
+
+```bash
+npm run dev       # Développement (http://localhost:3000)
+npm run build     # Build production
+npm run lint      # ESLint
+```
+
+---
+
+## URLs de production
+
+- **App** : https://campagne-ia.vercel.app
+- **Webhook Vapi** : https://campagne-ia.vercel.app/api/vapi/webhook
+- **Knowledge API** : https://campagne-ia.vercel.app/api/knowledge
+- **Leads API** : https://campagne-ia.vercel.app/api/leads
+
+---
+
 ## Historique des modifications
 
 | Date | Description |
 |------|-------------|
-| 2026-04-19 | Création initiale du projet : dashboard, campagnes, contacts, appels, retargeting, rapports, paramètres |
-| 2026-04-19 | Ajout CLAUDE.md, intégration Google Sheets (service + API route), base de connaissances voix IA, page /knowledge |
-| 2026-04-19 | Déploiement Vercel production : https://campagne-ia.vercel.app |
-
----
-
-## Prochaines évolutions possibles
-- Auth (NextAuth.js) avec rôles admin/manager/viewer
-- Base de données réelle (PostgreSQL via Prisma)
-- Enregistrement audio des appels + lecture dans le CRM
-- Export Excel/CSV des rapports
-- Multi-tenant (plusieurs organisations)
-- Tableau de bord temps réel via WebSockets
+| 2026-04-19 | Création initiale : dashboard, campagnes, contacts, appels, retargeting, rapports, paramètres |
+| 2026-04-19 | CLAUDE.md, Google Sheets service, base de connaissances voix IA, page /knowledge |
+| 2026-04-19 | Déploiement Vercel : https://campagne-ia.vercel.app |
+| 2026-04-19 | Refonte complète : Supabase (DB réelle), Vapi.ai (voix + téléphonie + webhook), CRUD complet, données temps réel |
