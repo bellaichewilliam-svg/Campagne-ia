@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Mic2, Key, Bell, Globe, Sliders, Save, Play, Volume2 } from 'lucide-react'
+import { Mic2, Key, Bell, Sliders, Save, Play, Volume2, Sheet, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import clsx from 'clsx'
 import PageHeader from '@/components/PageHeader'
 
@@ -13,13 +13,36 @@ const VOICES = [
   { id: 'pierre', name: 'Pierre', lang: 'Français (FR)', gender: 'Masculin', preview: true },
 ]
 
-const TABS = ['Voix IA', 'Intégrations API', 'Notifications', 'Général']
+const TABS = ['Voix IA', 'Google Sheets', 'Intégrations API', 'Notifications', 'Général']
 
 export default function SettingsPage() {
   const [tab, setTab] = useState('Voix IA')
   const [selectedVoice, setSelectedVoice] = useState('emma')
   const [speed, setSpeed] = useState(1.0)
   const [pitch, setPitch] = useState(0)
+
+  // Google Sheets state
+  const [spreadsheetId, setSpreadsheetId] = useState('')
+  const [sheetTestStatus, setSheetTestStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
+  const [sheetTestMsg, setSheetTestMsg] = useState('')
+
+  const testSheets = async () => {
+    setSheetTestStatus('loading')
+    try {
+      const res = await fetch('/api/sheets-test')
+      const data = await res.json()
+      if (data.ok) {
+        setSheetTestStatus('ok')
+        setSheetTestMsg(`Connecté : "${data.sheetTitle}"`)
+      } else {
+        setSheetTestStatus('error')
+        setSheetTestMsg(data.error ?? 'Connexion échouée')
+      }
+    } catch {
+      setSheetTestStatus('error')
+      setSheetTestMsg('Erreur réseau')
+    }
+  }
 
   return (
     <div className="p-6 max-w-[1000px] mx-auto">
@@ -113,6 +136,114 @@ export default function SettingsPage() {
             </div>
             <button className="mt-5 flex items-center gap-2 px-5 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 transition-colors">
               <Save size={15} /> Sauvegarder
+            </button>
+          </div>
+        </div>
+      )}
+
+      {tab === 'Google Sheets' && (
+        <div className="space-y-4">
+          <div className="card p-6">
+            <h3 className="text-sm font-semibold text-gray-800 mb-1 flex items-center gap-2">
+              <Sheet size={16} className="text-emerald-600" /> Connexion Google Sheets
+            </h3>
+            <p className="text-xs text-gray-500 mb-4">Les leads convertis sont envoyés automatiquement dans votre Google Sheet, un onglet par campagne.</p>
+
+            <div className="bg-brand-50 rounded-xl p-4 mb-5 space-y-2 text-xs text-gray-700">
+              <p className="font-semibold text-gray-800">Configuration requise :</p>
+              <ol className="list-decimal list-inside space-y-1 text-gray-600">
+                <li>Créer un projet sur <strong>Google Cloud Console</strong></li>
+                <li>Activer l'API <strong>Google Sheets</strong></li>
+                <li>Créer un <strong>compte de service</strong> → télécharger le JSON</li>
+                <li>Partager votre Sheet avec l'email du compte de service</li>
+                <li>Remplir les variables d'environnement dans <code className="bg-white px-1 rounded font-mono">.env.local</code></li>
+              </ol>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">ID du Google Spreadsheet *</label>
+                <div className="flex gap-2">
+                  <input
+                    className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500"
+                    placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
+                    value={spreadsheetId}
+                    onChange={e => setSpreadsheetId(e.target.value)}
+                  />
+                  <button
+                    onClick={testSheets}
+                    disabled={sheetTestStatus === 'loading'}
+                    className="flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    {sheetTestStatus === 'loading' && <Loader2 size={14} className="animate-spin" />}
+                    {sheetTestStatus === 'ok' && <CheckCircle2 size={14} className="text-emerald-600" />}
+                    {sheetTestStatus === 'error' && <XCircle size={14} className="text-red-500" />}
+                    {sheetTestStatus === 'idle' && <Sheet size={14} />}
+                    Tester la connexion
+                  </button>
+                </div>
+                {sheetTestMsg && (
+                  <p className={clsx('text-xs mt-1.5 flex items-center gap-1', sheetTestStatus === 'ok' ? 'text-emerald-600' : 'text-red-500')}>
+                    {sheetTestStatus === 'ok' ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
+                    {sheetTestMsg}
+                  </p>
+                )}
+                <p className="text-[11px] text-gray-400 mt-1">L'ID se trouve dans l'URL de votre Google Sheet : docs.google.com/spreadsheets/d/<strong>ID</strong>/edit</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Variables d'environnement (.env.local)</label>
+                <div className="bg-gray-900 rounded-xl p-4 font-mono text-xs text-green-400 space-y-1">
+                  <p><span className="text-gray-500"># Compte de service Google</span></p>
+                  <p>GOOGLE_SERVICE_ACCOUNT_EMAIL=xxx@projet.iam.gserviceaccount.com</p>
+                  <p>GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n..."</p>
+                  <p>GOOGLE_SPREADSHEET_ID={spreadsheetId || '<votre-id>'}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="card p-6">
+            <h3 className="text-sm font-semibold text-gray-800 mb-4">Structure des colonnes (auto-générée)</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-gray-50 rounded-lg">
+                    {['Date', 'Prénom', 'Nom', 'Téléphone', 'Email', 'Entreprise', 'Segment', 'Campagne', 'Statut appel', 'Durée (s)', 'Sentiment', 'Notes'].map(col => (
+                      <th key={col} className="text-left px-3 py-2 font-semibold text-gray-500 whitespace-nowrap">{col}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-t border-gray-100">
+                    {['19/04/2026', 'Marie', 'Dupont', '+33 6 12...', 'marie@...', 'TechCorp', 'Premium', 'Promo Printemps', 'converti', '142', 'positif', 'Devis demandé'].map((v, i) => (
+                      <td key={i} className="px-3 py-2 text-gray-500 italic whitespace-nowrap">{v}</td>
+                    ))}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p className="text-[11px] text-gray-400 mt-3">Un onglet est créé automatiquement pour chaque campagne. Les en-têtes sont générés à la première utilisation.</p>
+          </div>
+
+          <div className="card p-6">
+            <h3 className="text-sm font-semibold text-gray-800 mb-3">Tester manuellement l'envoi d'un lead</h3>
+            <p className="text-xs text-gray-500 mb-4">Envoyez un lead de test pour vérifier que votre Google Sheet reçoit bien les données.</p>
+            <button
+              onClick={async () => {
+                await fetch('/api/leads', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    campaignName: 'Test Connexion',
+                    contact: { firstName: 'Jean', lastName: 'Test', phone: '+33 6 00 00 00 00', email: 'test@example.com', company: 'Test Corp', segment: 'Test' },
+                    call: { status: 'converti', duration: 120, sentiment: 'positif', notes: 'Lead de test' },
+                  }),
+                })
+              }}
+              className="flex items-center gap-2 px-5 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700"
+            >
+              <Sheet size={15} /> Envoyer un lead de test
             </button>
           </div>
         </div>

@@ -12,6 +12,7 @@ import {
   Settings,
   Mic2,
   ChevronRight,
+  BookOpen,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -22,6 +23,7 @@ const nav = [
   { href: '/calls', label: 'Appels', icon: PhoneCall },
   { href: '/retargeting', label: 'Retargeting', icon: RefreshCw },
   { href: '/reports', label: 'Rapports', icon: BarChart3 },
+  { href: '/knowledge', label: 'Base de connaissances', icon: BookOpen },
   { href: '/settings', label: 'Paramètres', icon: Settings },
 ]
 
