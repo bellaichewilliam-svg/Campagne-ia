@@ -23,6 +23,13 @@ export default function SettingsPage() {
   const [pitch, setPitch] = useState(0)
   const [filterProvider, setFilterProvider] = useState('all')
 
+  // ElevenLabs
+  const [elKey, setElKey] = useState('')
+  const [elStatus, setElStatus] = useState<{ connected: boolean } | null>(null)
+  const [elTestStatus, setElTestStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
+  const [elTestMsg, setElTestMsg] = useState('')
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+
   // Google OAuth status
   const [googleStatus, setGoogleStatus] = useState<{ connected: boolean; email?: string; spreadsheetId?: string } | null>(null)
   const [userSheets, setUserSheets] = useState<{ id: string; name: string }[]>([])
@@ -49,14 +56,25 @@ export default function SettingsPage() {
     setNotionDbId(data.databaseId ?? '')
   }, [])
 
-  useEffect(() => {
+  const loadElStatus = useCallback(async () => {
+    const res = await fetch('/api/elevenlabs/config')
+    setElStatus(await res.json())
+  }, [])
+
+  const reloadVoices = useCallback(() => {
+    setLoadingVoices(true)
     fetch('/api/vapi/voices')
       .then(r => r.json())
       .then((v: VapiVoice[]) => { setVoices(v); setSelectedVoice(v[0] ?? null) })
       .finally(() => setLoadingVoices(false))
+  }, [])
+
+  useEffect(() => {
+    reloadVoices()
     loadGoogleStatus()
     loadNotionStatus()
-  }, [loadGoogleStatus, loadNotionStatus])
+    loadElStatus()
+  }, [reloadVoices, loadGoogleStatus, loadNotionStatus, loadElStatus])
 
   // Si l'utilisateur vient de se connecter avec Google → stocker le statut
   useEffect(() => {
@@ -127,6 +145,33 @@ export default function SettingsPage() {
     loadNotionStatus()
   }
 
+  const saveElevenLabs = async () => {
+    if (!elKey.trim()) return
+    setElTestStatus('loading')
+    try {
+      const res = await fetch('/api/elevenlabs/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: elKey }),
+      })
+      const data = await res.json()
+      setElTestStatus(data.ok ? 'ok' : 'error')
+      setElTestMsg(data.ok ? `Connecté — ${data.voiceCount} voix disponibles` : (data.error ?? 'Clé invalide'))
+      if (data.ok) { loadElStatus(); reloadVoices() }
+    } catch {
+      setElTestStatus('error')
+      setElTestMsg('Erreur réseau')
+    }
+  }
+
+  const disconnectElevenLabs = async () => {
+    await fetch('/api/elevenlabs/config', { method: 'DELETE' })
+    setElKey('')
+    setElTestStatus('idle')
+    loadElStatus()
+    reloadVoices()
+  }
+
   return (
     <div className="p-6 max-w-[1000px] mx-auto">
       <PageHeader title="Paramètres" subtitle="Configuration complète de votre CRM voix IA" />
@@ -142,9 +187,70 @@ export default function SettingsPage() {
       {/* ── VOIX IA ── */}
       {tab === 'Voix IA' && (
         <div className="space-y-4">
+
+          {/* ElevenLabs connexion */}
+          <div className={clsx('card p-6 border-2', elStatus?.connected ? 'border-emerald-200' : 'border-gray-200')}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-[#FF5B00] flex items-center justify-center text-white font-bold text-sm">11</div>
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">ElevenLabs — Voix IA réalistes</h3>
+                <a href="https://elevenlabs.io" target="_blank" rel="noopener" className="text-xs text-brand-600 flex items-center gap-1">elevenlabs.io <ExternalLink size={10} /></a>
+              </div>
+              {elStatus?.connected && (
+                <span className="ml-auto badge bg-emerald-50 text-emerald-700 flex items-center gap-1">
+                  <CheckCircle2 size={12} /> Connecté
+                </span>
+              )}
+            </div>
+
+            {elStatus?.connected ? (
+              <div className="flex items-center justify-between p-3 bg-emerald-50 rounded-xl">
+                <p className="text-sm text-emerald-700">Vos voix ElevenLabs sont chargées ci-dessous.</p>
+                <button onClick={disconnectElevenLabs} className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-600 border border-red-200 rounded-lg hover:bg-red-50">
+                  <LogOut size={12} /> Déconnecter
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="bg-brand-50 rounded-xl p-4 mb-4 text-xs text-gray-600 space-y-1">
+                  <p className="font-semibold text-gray-800">Obtenir votre clé API :</p>
+                  <ol className="list-decimal list-inside space-y-1">
+                    <li>Créer un compte sur <strong>elevenlabs.io</strong></li>
+                    <li>Aller dans <strong>Profile → API Key</strong></li>
+                    <li>Copier votre clé et la coller ci-dessous</li>
+                  </ol>
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={elKey}
+                    onChange={e => setElKey(e.target.value)}
+                    placeholder="sk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                    className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  />
+                  <button
+                    onClick={saveElevenLabs}
+                    disabled={elTestStatus === 'loading' || !elKey.trim()}
+                    className="flex items-center gap-2 px-4 py-2 bg-[#FF5B00] text-white text-sm font-medium rounded-lg hover:bg-orange-600 disabled:opacity-50"
+                  >
+                    {elTestStatus === 'loading' ? <Loader2 size={14} className="animate-spin" /> : <Key size={14} />}
+                    Connecter
+                  </button>
+                </div>
+                {elTestStatus !== 'idle' && elTestStatus !== 'loading' && (
+                  <p className={clsx('mt-2 text-xs flex items-center gap-1', elTestStatus === 'ok' ? 'text-emerald-600' : 'text-red-500')}>
+                    {elTestStatus === 'ok' ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
+                    {elTestMsg}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+
           <div className="card p-6">
             <h3 className="text-sm font-semibold text-gray-800 mb-4 flex items-center gap-2">
               <Mic2 size={16} className="text-brand-600" /> Voix disponibles
+              {elStatus?.connected && <span className="ml-auto text-xs text-emerald-600 font-normal flex items-center gap-1"><CheckCircle2 size={11} /> ElevenLabs actif</span>}
             </h3>
 
             {loadingVoices ? (
@@ -181,14 +287,24 @@ export default function SettingsPage() {
                 </div>
 
                 {selectedVoice && (
-                  <div className="mt-4 p-3 bg-brand-50 rounded-xl flex items-center justify-between">
-                    <div className="text-sm">
-                      <span className="font-semibold text-brand-800">{selectedVoice.name}</span>
-                      <span className="text-brand-600 ml-2">· {selectedVoice.gender} · {selectedVoice.provider === '11labs' ? 'ElevenLabs' : selectedVoice.provider}</span>
+                  <div className="mt-4 p-3 bg-brand-50 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm">
+                        <span className="font-semibold text-brand-800">{selectedVoice.name}</span>
+                        <span className="text-brand-600 ml-2">· {selectedVoice.gender} · {selectedVoice.provider === '11labs' ? 'ElevenLabs' : selectedVoice.provider}</span>
+                      </div>
+                      {selectedVoice.preview_url && (
+                        <button
+                          onClick={() => setPreviewUrl(previewUrl === selectedVoice.preview_url ? null : selectedVoice.preview_url ?? null)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 text-white text-xs font-medium rounded-lg hover:bg-brand-700"
+                        >
+                          <Play size={11} /> {previewUrl === selectedVoice.preview_url ? 'Stop' : 'Aperçu'}
+                        </button>
+                      )}
                     </div>
-                    <button className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 text-white text-xs font-medium rounded-lg hover:bg-brand-700">
-                      <Play size={11} /> Aperçu
-                    </button>
+                    {previewUrl === selectedVoice.preview_url && selectedVoice.preview_url && (
+                      <audio src={selectedVoice.preview_url} autoPlay controls className="w-full h-8" onEnded={() => setPreviewUrl(null)} />
+                    )}
                   </div>
                 )}
               </>
