@@ -1,13 +1,15 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   Plus, Search, BookOpen, Lightbulb, ShieldCheck, Building2,
-  FileText, Mic2, Pencil, Trash2, X, Check, AlertCircle, ChevronDown
+  FileText, Mic2, Pencil, Trash2, X, Check, Loader2,
 } from 'lucide-react'
 import clsx from 'clsx'
 import PageHeader from '@/components/PageHeader'
-import { defaultKnowledge, type KnowledgeEntry, type KnowledgeCategory } from '@/lib/voiceKnowledge'
+import type { KnowledgeEntry } from '@/lib/supabase'
+
+type KnowledgeCategory = KnowledgeEntry['category']
 
 const categoryConfig: Record<KnowledgeCategory, { label: string; icon: typeof BookOpen; color: string; bg: string }> = {
   faq:       { label: 'FAQ',        icon: BookOpen,    color: 'text-blue-600',    bg: 'bg-blue-50' },
@@ -23,7 +25,15 @@ const priorityLabel: Record<number, { label: string; color: string }> = {
   3: { label: 'Basse', color: 'text-gray-400' },
 }
 
-type FormState = Omit<KnowledgeEntry, 'id' | 'createdAt' | 'updatedAt'>
+type FormState = {
+  category: KnowledgeCategory
+  title: string
+  content: string
+  campaigns: string[]
+  active: boolean
+  priority: 1 | 2 | 3
+  tags: string[]
+}
 
 const emptyForm: FormState = {
   category: 'faq',
@@ -35,12 +45,14 @@ const emptyForm: FormState = {
   tags: [],
 }
 
-function EntryModal({ entry, onClose }: { entry?: KnowledgeEntry; onClose: () => void }) {
+function EntryModal({ entry, onClose, onSaved }: { entry?: KnowledgeEntry; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = useState<FormState>(entry ? {
     category: entry.category, title: entry.title, content: entry.content,
-    campaigns: entry.campaigns, active: entry.active, priority: entry.priority, tags: entry.tags,
+    campaigns: entry.campaigns ?? [], active: entry.active, priority: entry.priority, tags: entry.tags ?? [],
   } : emptyForm)
   const [tagInput, setTagInput] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setForm(f => ({ ...f, [k]: v }))
 
@@ -49,6 +61,38 @@ function EntryModal({ entry, onClose }: { entry?: KnowledgeEntry; onClose: () =>
     if (t && !form.tags.includes(t)) {
       set('tags', [...form.tags, t])
       setTagInput('')
+    }
+  }
+
+  const save = async () => {
+    if (!form.title.trim() || !form.content.trim()) {
+      setError('Titre et contenu requis')
+      return
+    }
+    setSaving(true)
+    setError(null)
+    try {
+      const res = entry
+        ? await fetch('/api/knowledge', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: entry.id, ...form }),
+          })
+        : await fetch('/api/knowledge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(form),
+          })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error ?? 'Erreur sauvegarde')
+      }
+      onSaved()
+      onClose()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erreur')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -159,11 +203,20 @@ function EntryModal({ entry, onClose }: { entry?: KnowledgeEntry; onClose: () =>
             </button>
             <span className="text-sm text-gray-700">{form.active ? 'Entrée active' : 'Entrée désactivée'}</span>
           </div>
+
+          {error && (
+            <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</div>
+          )}
         </div>
 
         <div className="flex justify-end gap-3 px-6 py-4 border-t flex-shrink-0">
           <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Annuler</button>
-          <button onClick={onClose} className="px-5 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700">
+          <button
+            onClick={save}
+            disabled={saving}
+            className="flex items-center gap-2 px-5 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50"
+          >
+            {saving && <Loader2 size={14} className="animate-spin" />}
             {entry ? 'Sauvegarder' : 'Créer'}
           </button>
         </div>
@@ -183,7 +236,7 @@ function TestModal({ onClose }: { onClose: () => void }) {
     try {
       const res = await fetch(`/api/knowledge?query=${encodeURIComponent(query)}&limit=3`)
       const data = await res.json()
-      setResult(data.context)
+      setResult(data.context || '(aucun contexte trouvé)')
     } catch {
       setResult('Erreur lors du test.')
     } finally {
@@ -241,26 +294,47 @@ function TestModal({ onClose }: { onClose: () => void }) {
 }
 
 export default function KnowledgePage() {
-  const [entries, setEntries] = useState<KnowledgeEntry[]>(defaultKnowledge)
+  const [entries, setEntries] = useState<KnowledgeEntry[]>([])
+  const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterCat, setFilterCat] = useState<string>('all')
   const [editEntry, setEditEntry] = useState<KnowledgeEntry | undefined>(undefined)
   const [showNew, setShowNew] = useState(false)
   const [showTest, setShowTest] = useState(false)
 
+  const load = useCallback(() => {
+    setLoading(true)
+    fetch('/api/knowledge')
+      .then(r => r.json())
+      .then(d => setEntries(Array.isArray(d) ? d : []))
+      .catch(() => setEntries([]))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
   const filtered = entries.filter(e => {
     const matchSearch = e.title.toLowerCase().includes(search.toLowerCase()) ||
       e.content.toLowerCase().includes(search.toLowerCase()) ||
-      e.tags.some(t => t.includes(search.toLowerCase()))
+      (e.tags ?? []).some(t => t.includes(search.toLowerCase()))
     const matchCat = filterCat === 'all' || e.category === filterCat
     return matchSearch && matchCat
   })
 
-  const toggle = (id: string) =>
-    setEntries(es => es.map(e => e.id === id ? { ...e, active: !e.active } : e))
+  const toggle = async (entry: KnowledgeEntry) => {
+    setEntries(es => es.map(e => e.id === entry.id ? { ...e, active: !e.active } : e))
+    await fetch('/api/knowledge', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: entry.id, active: !entry.active }),
+    })
+  }
 
-  const remove = (id: string) =>
-    setEntries(es => es.filter(e => e.id !== id))
+  const remove = async (entry: KnowledgeEntry) => {
+    if (!confirm(`Supprimer "${entry.title}" ?`)) return
+    setEntries(es => es.filter(e => e.id !== entry.id))
+    await fetch(`/api/knowledge?id=${entry.id}`, { method: 'DELETE' })
+  }
 
   const counts = Object.fromEntries(
     Object.keys(categoryConfig).map(k => [k, entries.filter(e => e.category === k).length])
@@ -268,8 +342,8 @@ export default function KnowledgePage() {
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
-      {showNew && <EntryModal onClose={() => setShowNew(false)} />}
-      {editEntry && <EntryModal entry={editEntry} onClose={() => setEditEntry(undefined)} />}
+      {showNew && <EntryModal onClose={() => setShowNew(false)} onSaved={load} />}
+      {editEntry && <EntryModal entry={editEntry} onClose={() => setEditEntry(undefined)} onSaved={load} />}
       {showTest && <TestModal onClose={() => setShowTest(false)} />}
 
       <PageHeader
@@ -289,7 +363,6 @@ export default function KnowledgePage() {
         }
       />
 
-      {/* How it works banner */}
       <div className="card p-5 mb-6 bg-gradient-to-r from-brand-50 to-purple-50 border-brand-100">
         <div className="flex items-start gap-4">
           <div className="w-10 h-10 rounded-xl bg-brand-100 flex items-center justify-center flex-shrink-0">
@@ -315,7 +388,6 @@ export default function KnowledgePage() {
         </div>
       </div>
 
-      {/* Category pills */}
       <div className="flex flex-wrap gap-2 mb-5">
         <button
           onClick={() => setFilterCat('all')}
@@ -338,7 +410,6 @@ export default function KnowledgePage() {
         })}
       </div>
 
-      {/* Search */}
       <div className="relative mb-4">
         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
         <input
@@ -349,62 +420,70 @@ export default function KnowledgePage() {
         />
       </div>
 
-      {/* Entries grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {filtered.map(entry => {
-          const cfg = categoryConfig[entry.category]
-          const Icon = cfg.icon
-          const prio = priorityLabel[entry.priority]
+      {loading ? (
+        <div className="flex items-center justify-center py-12 text-gray-400 gap-2">
+          <Loader2 size={20} className="animate-spin" /> Chargement...
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {filtered.map(entry => {
+            const cfg = categoryConfig[entry.category]
+            const Icon = cfg.icon
+            const prio = priorityLabel[entry.priority]
 
-          return (
-            <div key={entry.id} className={clsx('card p-5 transition-all', !entry.active && 'opacity-50')}>
-              <div className="flex items-start gap-3">
-                <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0', cfg.bg)}>
-                  <Icon size={16} className={cfg.color} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className={clsx('badge text-[10px]', cfg.bg, cfg.color)}>{cfg.label}</span>
-                    <span className={clsx('text-[10px] font-medium', prio.color)}>Priorité {prio.label}</span>
-                    {!entry.active && <span className="badge bg-gray-100 text-gray-400 text-[10px]">Désactivé</span>}
+            return (
+              <div key={entry.id} className={clsx('card p-5 transition-all', !entry.active && 'opacity-50')}>
+                <div className="flex items-start gap-3">
+                  <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0', cfg.bg)}>
+                    <Icon size={16} className={cfg.color} />
                   </div>
-                  <h3 className="text-sm font-semibold text-gray-900 mt-1.5">{entry.title}</h3>
-                  <p className="text-xs text-gray-500 mt-1 line-clamp-2 leading-relaxed">{entry.content}</p>
-                  {entry.tags.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-2">
-                      {entry.tags.map(tag => (
-                        <span key={tag} className="text-[10px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">{tag}</span>
-                      ))}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={clsx('badge text-[10px]', cfg.bg, cfg.color)}>{cfg.label}</span>
+                      <span className={clsx('text-[10px] font-medium', prio.color)}>Priorité {prio.label}</span>
+                      {!entry.active && <span className="badge bg-gray-100 text-gray-400 text-[10px]">Désactivé</span>}
                     </div>
-                  )}
-                  {entry.campaigns.length > 0 && (
-                    <p className="text-[10px] text-brand-500 mt-2">
-                      Campagnes : {entry.campaigns.join(', ')}
-                    </p>
-                  )}
-                </div>
-                <div className="flex flex-col gap-1.5 flex-shrink-0">
-                  <button onClick={() => toggle(entry.id)} className={clsx('w-7 h-7 rounded-lg flex items-center justify-center transition-colors', entry.active ? 'bg-emerald-50 hover:bg-emerald-100' : 'bg-gray-100 hover:bg-gray-200')}>
-                    {entry.active ? <Check size={12} className="text-emerald-600" /> : <X size={12} className="text-gray-400" />}
-                  </button>
-                  <button onClick={() => setEditEntry(entry)} className="w-7 h-7 rounded-lg bg-gray-50 hover:bg-gray-100 flex items-center justify-center transition-colors">
-                    <Pencil size={12} className="text-gray-500" />
-                  </button>
-                  <button onClick={() => remove(entry.id)} className="w-7 h-7 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center transition-colors">
-                    <Trash2 size={12} className="text-red-500" />
-                  </button>
+                    <h3 className="text-sm font-semibold text-gray-900 mt-1.5">{entry.title}</h3>
+                    <p className="text-xs text-gray-500 mt-1 line-clamp-2 leading-relaxed">{entry.content}</p>
+                    {(entry.tags ?? []).length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {entry.tags.map(tag => (
+                          <span key={tag} className="text-[10px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">{tag}</span>
+                        ))}
+                      </div>
+                    )}
+                    {(entry.campaigns ?? []).length > 0 && (
+                      <p className="text-[10px] text-brand-500 mt-2">
+                        Campagnes : {entry.campaigns.join(', ')}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-1.5 flex-shrink-0">
+                    <button onClick={() => toggle(entry)} className={clsx('w-7 h-7 rounded-lg flex items-center justify-center transition-colors', entry.active ? 'bg-emerald-50 hover:bg-emerald-100' : 'bg-gray-100 hover:bg-gray-200')}>
+                      {entry.active ? <Check size={12} className="text-emerald-600" /> : <X size={12} className="text-gray-400" />}
+                    </button>
+                    <button onClick={() => setEditEntry(entry)} className="w-7 h-7 rounded-lg bg-gray-50 hover:bg-gray-100 flex items-center justify-center transition-colors">
+                      <Pencil size={12} className="text-gray-500" />
+                    </button>
+                    <button onClick={() => remove(entry)} className="w-7 h-7 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center transition-colors">
+                      <Trash2 size={12} className="text-red-500" />
+                    </button>
+                  </div>
                 </div>
               </div>
+            )
+          })}
+          {filtered.length === 0 && (
+            <div className="col-span-2 card p-12 text-center">
+              <BookOpen size={32} className="text-gray-300 mx-auto mb-3" />
+              <p className="text-sm text-gray-500">Aucune entrée trouvée</p>
+              <button onClick={() => setShowNew(true)} className="mt-4 px-4 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700">
+                Créer la première entrée
+              </button>
             </div>
-          )
-        })}
-        {filtered.length === 0 && (
-          <div className="col-span-2 card p-12 text-center">
-            <BookOpen size={32} className="text-gray-300 mx-auto mb-3" />
-            <p className="text-sm text-gray-500">Aucune entrée trouvée</p>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

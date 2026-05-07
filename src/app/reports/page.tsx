@@ -133,7 +133,7 @@ export default function ReportsPage() {
                 </button>
               ))}
             </div>
-            <button className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-sm text-gray-700 rounded-lg hover:bg-gray-50">
+            <button onClick={() => window.print()} className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-sm text-gray-700 rounded-lg hover:bg-gray-50">
               <Download size={15} />
               Exporter PDF
             </button>

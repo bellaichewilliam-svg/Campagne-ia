@@ -44,6 +44,21 @@ export default function SettingsPage() {
   const [notionTestStatus, setNotionTestStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
   const [notionTestMsg, setNotionTestMsg] = useState('')
 
+  // Telephony (Kavkom + Vapi)
+  const [tel, setTel] = useState({ kavkom_api_key: '', kavkom_account_id: '', kavkom_did: '', vapi_api_key: '', vapi_phone_number_id: '', vapi_assistant_id: '' })
+  const [telSaveStatus, setTelSaveStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
+
+  // Voice settings
+  const [voiceSaveStatus, setVoiceSaveStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
+
+  // Notifications
+  const [notif, setNotif] = useState({ campaign_done: true, low_conversion: true, call_errors: false, weekly_report: true, new_lead: false })
+  const [notifSaveStatus, setNotifSaveStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
+
+  // General
+  const [general, setGeneral] = useState({ org_name: '', contact_email: '', timezone: 'Europe/Paris', call_hours: '09:00 – 19:00' })
+  const [generalSaveStatus, setGeneralSaveStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
+
   const loadGoogleStatus = useCallback(async () => {
     const res = await fetch('/api/google/status')
     setGoogleStatus(await res.json())
@@ -69,12 +84,61 @@ export default function SettingsPage() {
       .finally(() => setLoadingVoices(false))
   }, [])
 
+  const loadAppSettings = useCallback(async () => {
+    try {
+      const res = await fetch('/api/settings')
+      const data = await res.json()
+      if (data.voice_speed) setSpeed(parseFloat(data.voice_speed))
+      if (data.voice_pitch) setPitch(parseInt(data.voice_pitch))
+      setTel({
+        kavkom_api_key: data.kavkom_api_key ?? '',
+        kavkom_account_id: data.kavkom_account_id ?? '',
+        kavkom_did: data.kavkom_did ?? '',
+        vapi_api_key: data.vapi_api_key ?? '',
+        vapi_phone_number_id: data.vapi_phone_number_id ?? '',
+        vapi_assistant_id: data.vapi_assistant_id ?? '',
+      })
+      setGeneral({
+        org_name: data.org_name ?? '',
+        contact_email: data.contact_email ?? '',
+        timezone: data.timezone ?? 'Europe/Paris',
+        call_hours: data.call_hours ?? '09:00 – 19:00',
+      })
+      try {
+        const n = data.notifications ? JSON.parse(data.notifications) : null
+        if (n) setNotif(n)
+      } catch { /* ignore */ }
+    } catch { /* offline */ }
+  }, [])
+
   useEffect(() => {
     reloadVoices()
     loadGoogleStatus()
     loadNotionStatus()
     loadElStatus()
-  }, [reloadVoices, loadGoogleStatus, loadNotionStatus, loadElStatus])
+    loadAppSettings()
+  }, [reloadVoices, loadGoogleStatus, loadNotionStatus, loadElStatus, loadAppSettings])
+
+  const saveSettings = async (payload: Record<string, unknown>, setStatus: (s: 'idle' | 'loading' | 'ok' | 'error') => void) => {
+    setStatus('loading')
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      setStatus(res.ok ? 'ok' : 'error')
+      setTimeout(() => setStatus('idle'), 2500)
+    } catch {
+      setStatus('error')
+      setTimeout(() => setStatus('idle'), 2500)
+    }
+  }
+
+  const saveVoice = () => saveSettings({ voice_speed: speed.toString(), voice_pitch: pitch.toString(), voice_id: selectedVoice?.id ?? '', voice_name: selectedVoice?.name ?? '' }, setVoiceSaveStatus)
+  const saveTelephony = () => saveSettings(tel, setTelSaveStatus)
+  const saveNotif = () => saveSettings({ notifications: JSON.stringify(notif) }, setNotifSaveStatus)
+  const saveGeneral = () => saveSettings(general, setGeneralSaveStatus)
 
   // Si l'utilisateur vient de se connecter avec Google → stocker le statut
   useEffect(() => {
@@ -334,9 +398,13 @@ export default function SettingsPage() {
                 <input type="range" min={-5} max={5} step={1} value={pitch} onChange={e => setPitch(parseInt(e.target.value))} className="w-full accent-brand-600" />
               </div>
             </div>
-            <button className="mt-5 flex items-center gap-2 px-5 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700">
-              <Save size={15} /> Sauvegarder
-            </button>
+            <div className="mt-5 flex items-center gap-3">
+              <button onClick={saveVoice} disabled={voiceSaveStatus === 'loading'} className="flex items-center gap-2 px-5 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50">
+                {voiceSaveStatus === 'loading' ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Sauvegarder
+              </button>
+              {voiceSaveStatus === 'ok' && <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> Enregistré</span>}
+              {voiceSaveStatus === 'error' && <span className="text-xs text-red-500 flex items-center gap-1"><XCircle size={12} /> Erreur</span>}
+            </div>
           </div>
         </div>
       )}
@@ -370,13 +438,19 @@ export default function SettingsPage() {
 
             <div className="space-y-3">
               {[
-                { label: 'Clé API Kavkom', env: 'KAVKOM_API_KEY', placeholder: 'xxxxxxxxxxxxxx' },
-                { label: 'Account ID', env: 'KAVKOM_ACCOUNT_ID', placeholder: 'ACC_xxxxxxxx' },
-                { label: 'Numéro DID sortant', env: 'KAVKOM_DID_NUMBER', placeholder: '+33123456789' },
+                { label: 'Clé API Kavkom', key: 'kavkom_api_key' as const, env: 'KAVKOM_API_KEY', placeholder: 'xxxxxxxxxxxxxx', type: 'password' },
+                { label: 'Account ID', key: 'kavkom_account_id' as const, env: 'KAVKOM_ACCOUNT_ID', placeholder: 'ACC_xxxxxxxx', type: 'text' },
+                { label: 'Numéro DID sortant', key: 'kavkom_did' as const, env: 'KAVKOM_DID_NUMBER', placeholder: '+33123456789', type: 'text' },
               ].map(f => (
                 <div key={f.env}>
                   <label className="block text-xs font-medium text-gray-700 mb-1">{f.label}</label>
-                  <input type="password" placeholder={f.placeholder} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                  <input
+                    type={f.type}
+                    placeholder={f.placeholder}
+                    value={tel[f.key]}
+                    onChange={e => setTel(t => ({ ...t, [f.key]: e.target.value }))}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  />
                   <p className="text-[11px] text-gray-400 mt-0.5">Variable : <code className="bg-gray-100 px-1 rounded">{f.env}</code></p>
                 </div>
               ))}
@@ -409,19 +483,46 @@ export default function SettingsPage() {
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">Clé API Vapi</label>
-                <input type="password" defaultValue="" placeholder="vapi_xxxxxxxxxxxxxxxxxxxxxxxx" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                <input
+                  type="password"
+                  value={tel.vapi_api_key}
+                  onChange={e => setTel(t => ({ ...t, vapi_api_key: e.target.value }))}
+                  placeholder="vapi_xxxxxxxxxxxxxxxxxxxxxxxx"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500"
+                />
                 <p className="text-[11px] text-gray-400 mt-1">Variable d'env : <code className="bg-gray-100 px-1 rounded">VAPI_API_KEY</code></p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">ID du numéro de téléphone</label>
-                <input type="text" defaultValue="" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                <input
+                  type="text"
+                  value={tel.vapi_phone_number_id}
+                  onChange={e => setTel(t => ({ ...t, vapi_phone_number_id: e.target.value }))}
+                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500"
+                />
                 <p className="text-[11px] text-gray-400 mt-1">Variable d'env : <code className="bg-gray-100 px-1 rounded">VAPI_PHONE_NUMBER_ID</code></p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">ID de l'assistant par défaut (optionnel)</label>
-                <input type="text" defaultValue="" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                <input
+                  type="text"
+                  value={tel.vapi_assistant_id}
+                  onChange={e => setTel(t => ({ ...t, vapi_assistant_id: e.target.value }))}
+                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-500"
+                />
                 <p className="text-[11px] text-gray-400 mt-1">Variable d'env : <code className="bg-gray-100 px-1 rounded">VAPI_ASSISTANT_ID</code></p>
               </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button onClick={saveTelephony} disabled={telSaveStatus === 'loading'} className="flex items-center gap-2 px-5 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50">
+                  {telSaveStatus === 'loading' ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Sauvegarder téléphonie
+                </button>
+                {telSaveStatus === 'ok' && <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> Enregistré</span>}
+                {telSaveStatus === 'error' && <span className="text-xs text-red-500 flex items-center gap-1"><XCircle size={12} /> Erreur</span>}
+              </div>
+              <p className="text-[11px] text-gray-400">Note : ces valeurs sont stockées en base. Pour qu'elles soient utilisées par le serveur, configurez-les aussi en variables Vercel.</p>
             </div>
           </div>
 
@@ -694,14 +795,19 @@ export default function SettingsPage() {
           </h3>
           <div className="space-y-3">
             {[
-              { label: 'Campagne terminée', sub: 'Notification quand 100% des contacts sont appelés', checked: true },
-              { label: 'Taux de conversion anormal', sub: 'Alerte si conversion < 10%', checked: true },
-              { label: 'Erreur d\'appel critique', sub: '> 20% d\'appels en erreur', checked: false },
-              { label: 'Rapport hebdomadaire', sub: 'Résumé chaque lundi par email', checked: true },
-              { label: 'Nouveau lead converti', sub: 'Notification en temps réel', checked: false },
+              { key: 'campaign_done' as const, label: 'Campagne terminée', sub: 'Notification quand 100% des contacts sont appelés' },
+              { key: 'low_conversion' as const, label: 'Taux de conversion anormal', sub: 'Alerte si conversion < 10%' },
+              { key: 'call_errors' as const, label: 'Erreur d\'appel critique', sub: '> 20% d\'appels en erreur' },
+              { key: 'weekly_report' as const, label: 'Rapport hebdomadaire', sub: 'Résumé chaque lundi par email' },
+              { key: 'new_lead' as const, label: 'Nouveau lead converti', sub: 'Notification en temps réel' },
             ].map(item => (
-              <div key={item.label} className="flex items-start gap-4 py-3 border-b border-gray-50 last:border-0">
-                <input type="checkbox" defaultChecked={item.checked} className="mt-0.5 accent-brand-600" />
+              <div key={item.key} className="flex items-start gap-4 py-3 border-b border-gray-50 last:border-0">
+                <input
+                  type="checkbox"
+                  checked={notif[item.key]}
+                  onChange={e => setNotif(n => ({ ...n, [item.key]: e.target.checked }))}
+                  className="mt-0.5 accent-brand-600"
+                />
                 <div>
                   <p className="text-sm font-medium text-gray-800">{item.label}</p>
                   <p className="text-xs text-gray-400 mt-0.5">{item.sub}</p>
@@ -709,7 +815,13 @@ export default function SettingsPage() {
               </div>
             ))}
           </div>
-          <button className="mt-4 flex items-center gap-2 px-5 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700"><Save size={15} /> Sauvegarder</button>
+          <div className="mt-4 flex items-center gap-3">
+            <button onClick={saveNotif} disabled={notifSaveStatus === 'loading'} className="flex items-center gap-2 px-5 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50">
+              {notifSaveStatus === 'loading' ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Sauvegarder
+            </button>
+            {notifSaveStatus === 'ok' && <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> Enregistré</span>}
+            {notifSaveStatus === 'error' && <span className="text-xs text-red-500 flex items-center gap-1"><XCircle size={12} /> Erreur</span>}
+          </div>
         </div>
       )}
 
@@ -720,17 +832,28 @@ export default function SettingsPage() {
             <Sliders size={16} className="text-brand-600" /> Paramètres généraux
           </h3>
           {[
-            { label: 'Nom de l\'organisation', value: 'Mon Entreprise SAS' },
-            { label: 'Email de contact', value: 'contact@entreprise.fr' },
-            { label: 'Fuseau horaire', value: 'Europe/Paris' },
-            { label: 'Plages horaires d\'appel', value: '09:00 – 19:00' },
+            { key: 'org_name' as const, label: 'Nom de l\'organisation', placeholder: 'Mon Entreprise SAS' },
+            { key: 'contact_email' as const, label: 'Email de contact', placeholder: 'contact@entreprise.fr' },
+            { key: 'timezone' as const, label: 'Fuseau horaire', placeholder: 'Europe/Paris' },
+            { key: 'call_hours' as const, label: 'Plages horaires d\'appel', placeholder: '09:00 – 19:00' },
           ].map(f => (
-            <div key={f.label}>
+            <div key={f.key}>
               <label className="block text-xs font-medium text-gray-700 mb-1">{f.label}</label>
-              <input defaultValue={f.value} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+              <input
+                value={general[f.key]}
+                onChange={e => setGeneral(g => ({ ...g, [f.key]: e.target.value }))}
+                placeholder={f.placeholder}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+              />
             </div>
           ))}
-          <button className="flex items-center gap-2 px-5 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700"><Save size={15} /> Sauvegarder</button>
+          <div className="flex items-center gap-3">
+            <button onClick={saveGeneral} disabled={generalSaveStatus === 'loading'} className="flex items-center gap-2 px-5 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50">
+              {generalSaveStatus === 'loading' ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Sauvegarder
+            </button>
+            {generalSaveStatus === 'ok' && <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> Enregistré</span>}
+            {generalSaveStatus === 'error' && <span className="text-xs text-red-500 flex items-center gap-1"><XCircle size={12} /> Erreur</span>}
+          </div>
         </div>
       )}
     </div>

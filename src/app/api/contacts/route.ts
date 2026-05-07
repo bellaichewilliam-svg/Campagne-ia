@@ -21,9 +21,19 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
+  const now = new Date().toISOString()
+
+  // Insertion en lot — body est un tableau (import CSV)
+  if (Array.isArray(body)) {
+    const rows = body.map(c => ({ ...c, created_at: now, updated_at: now }))
+    const { data, error } = await supabaseAdmin.from('contacts').insert(rows).select()
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ inserted: data?.length ?? 0, contacts: data }, { status: 201 })
+  }
+
   const { data, error } = await supabaseAdmin
     .from('contacts')
-    .insert({ ...body, created_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .insert({ ...body, created_at: now, updated_at: now })
     .select()
     .single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

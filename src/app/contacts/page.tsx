@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
-import { Search, Plus, Upload, Users, Star, Trash2, X, Loader2, AlertCircle, ChevronDown } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { Search, Plus, Upload, Users, Star, Trash2, X, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react'
 import clsx from 'clsx'
 import PageHeader from '@/components/PageHeader'
-import type { Contact } from '@/lib/supabase'
+import type { Contact, Campaign } from '@/lib/supabase'
 
 const statusColors = { client: 'bg-emerald-100 text-emerald-700', lead: 'bg-blue-100 text-blue-700', prospect: 'bg-yellow-100 text-yellow-700', inactif: 'bg-gray-100 text-gray-500' }
 const statusLabels = { client: 'Client', lead: 'Lead', prospect: 'Prospect', inactif: 'Inactif' }
@@ -114,6 +114,98 @@ function ContactModal({ contact, onClose, onSaved }: { contact?: Contact; onClos
   )
 }
 
+function parseCSV(text: string): Record<string, string>[] {
+  const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim().length > 0)
+  if (lines.length < 2) return []
+  const sep = (lines[0].match(/;/g)?.length ?? 0) > (lines[0].match(/,/g)?.length ?? 0) ? ';' : ','
+  const splitLine = (l: string) => {
+    const out: string[] = []
+    let cur = '', inQ = false
+    for (const ch of l) {
+      if (ch === '"') { inQ = !inQ; continue }
+      if (ch === sep && !inQ) { out.push(cur); cur = ''; continue }
+      cur += ch
+    }
+    out.push(cur)
+    return out.map(s => s.trim())
+  }
+  const headers = splitLine(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'))
+  return lines.slice(1).map(line => {
+    const cells = splitLine(line)
+    const row: Record<string, string> = {}
+    headers.forEach((h, i) => { row[h] = cells[i] ?? '' })
+    return row
+  })
+}
+
+const HEADER_ALIASES: Record<string, string> = {
+  prenom: 'first_name', prénom: 'first_name', firstname: 'first_name',
+  nom: 'last_name', lastname: 'last_name',
+  telephone: 'phone', téléphone: 'phone', tel: 'phone', mobile: 'phone',
+  mail: 'email', courriel: 'email',
+  entreprise: 'company', societe: 'company', société: 'company',
+}
+
+function BulkAddToCampaignModal({ contactIds, onClose, onDone }: { contactIds: string[]; onClose: () => void; onDone: () => void }) {
+  const [campaigns, setCampaigns] = useState<Campaign[]>([])
+  const [selected, setSelected] = useState<string>('')
+  const [loading, setLoading] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetch('/api/campaigns').then(r => r.json()).then(d => setCampaigns(Array.isArray(d) ? d : []))
+  }, [])
+
+  const submit = async () => {
+    if (!selected) return
+    setLoading(true)
+    setMsg(null)
+    try {
+      const res = await fetch(`/api/campaigns/${selected}/contacts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact_ids: contactIds }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Erreur')
+      setMsg(`${data.added ?? contactIds.length} contact(s) ajouté(s).`)
+      setTimeout(() => { onDone(); onClose() }, 800)
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Erreur')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl">
+        <div className="flex items-center justify-between p-6 border-b">
+          <h2 className="text-base font-bold text-gray-900">Ajouter à une campagne</h2>
+          <button onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center"><X size={16} /></button>
+        </div>
+        <div className="p-6 space-y-4">
+          <p className="text-sm text-gray-600">{contactIds.length} contact(s) à ajouter.</p>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Campagne</label>
+            <select value={selected} onChange={e => setSelected(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+              <option value="">Sélectionner...</option>
+              {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          {msg && <div className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> {msg}</div>}
+        </div>
+        <div className="flex justify-end gap-3 px-6 py-4 border-t">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Annuler</button>
+          <button onClick={submit} disabled={loading || !selected} className="flex items-center gap-2 px-5 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50">
+            {loading && <Loader2 size={13} className="animate-spin" />} Ajouter
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [loading, setLoading] = useState(true)
@@ -122,6 +214,10 @@ export default function ContactsPage() {
   const [showModal, setShowModal] = useState(false)
   const [editContact, setEditContact] = useState<Contact | undefined>()
   const [selected, setSelected] = useState<string[]>([])
+  const [showBulk, setShowBulk] = useState(false)
+  const [importMsg, setImportMsg] = useState<string | null>(null)
+  const [importing, setImporting] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -150,6 +246,49 @@ export default function ContactsPage() {
   const toggleSelect = (id: string) =>
     setSelected(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id])
 
+  const handleCSV = async (file: File) => {
+    setImporting(true)
+    setImportMsg(null)
+    try {
+      const text = await file.text()
+      const rows = parseCSV(text)
+      const mapped = rows.map(r => {
+        const out: Record<string, string | number> = {}
+        for (const [k, v] of Object.entries(r)) {
+          const key = HEADER_ALIASES[k] ?? k
+          if (['first_name', 'last_name', 'phone', 'email', 'company', 'segment', 'status', 'notes'].includes(key)) {
+            out[key] = v
+          }
+        }
+        return {
+          first_name: '', last_name: '', email: '', company: '',
+          segment: 'Standard', status: 'prospect', score: 50, notes: '',
+          ...out,
+        }
+      }).filter(r => r.phone)
+
+      if (mapped.length === 0) {
+        setImportMsg('Aucune ligne valide (colonne "phone" requise)')
+        return
+      }
+
+      const res = await fetch('/api/contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mapped),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Erreur')
+      setImportMsg(`${data.inserted ?? mapped.length} contact(s) importé(s)`)
+      load()
+    } catch (e) {
+      setImportMsg(e instanceof Error ? e.message : 'Erreur import')
+    } finally {
+      setImporting(false)
+      setTimeout(() => setImportMsg(null), 4000)
+    }
+  }
+
   const counts = {
     total: contacts.length,
     clients: contacts.filter(c => c.status === 'client').length,
@@ -166,14 +305,33 @@ export default function ContactsPage() {
           onSaved={load}
         />
       )}
+      {showBulk && (
+        <BulkAddToCampaignModal
+          contactIds={selected}
+          onClose={() => setShowBulk(false)}
+          onDone={() => setSelected([])}
+        />
+      )}
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".csv,text/csv"
+        className="hidden"
+        onChange={e => {
+          const f = e.target.files?.[0]
+          if (f) handleCSV(f)
+          e.target.value = ''
+        }}
+      />
 
       <PageHeader
         title="Contacts / CRM"
         subtitle="Gérez votre base de contacts"
         action={
           <div className="flex items-center gap-2">
-            <button className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-sm text-gray-700 rounded-lg hover:bg-gray-50">
-              <Upload size={15} /> Importer CSV
+            <button onClick={() => fileInputRef.current?.click()} disabled={importing} className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-sm text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-60">
+              {importing ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />} Importer CSV
             </button>
             <button onClick={() => setShowModal(true)} className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700">
               <Plus size={15} /> Ajouter
@@ -181,6 +339,12 @@ export default function ContactsPage() {
           </div>
         }
       />
+
+      {importMsg && (
+        <div className="mb-4 px-4 py-2 bg-brand-50 border border-brand-100 rounded-lg text-sm text-brand-700 flex items-center gap-2">
+          <CheckCircle2 size={14} /> {importMsg}
+        </div>
+      )}
 
       <div className="grid grid-cols-4 gap-3 mb-5">
         {[
@@ -211,7 +375,7 @@ export default function ContactsPage() {
         {selected.length > 0 && (
           <div className="ml-auto flex items-center gap-2 text-sm">
             <span className="text-gray-500">{selected.length} sélectionné(s)</span>
-            <button className="px-3 py-1.5 bg-brand-50 text-brand-700 rounded-lg text-xs font-medium hover:bg-brand-100">Ajouter à campagne</button>
+            <button onClick={() => setShowBulk(true)} className="px-3 py-1.5 bg-brand-50 text-brand-700 rounded-lg text-xs font-medium hover:bg-brand-100">Ajouter à campagne</button>
           </div>
         )}
       </div>

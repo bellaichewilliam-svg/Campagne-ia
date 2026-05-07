@@ -109,6 +109,12 @@ export default function RetargetingPage() {
     await fetch('/api/retargeting', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: rule.id, status: newStatus }) })
   }
 
+  const remove = async (rule: RetargetingRule) => {
+    if (!confirm(`Supprimer la règle "${rule.name}" ?`)) return
+    setRules(rs => rs.filter(r => r.id !== rule.id))
+    await fetch(`/api/retargeting?id=${rule.id}`, { method: 'DELETE' })
+  }
+
   const activeCount  = rules.filter(r => r.status === 'active').length
   const totalContacts = rules.reduce((s, r) => s + (r.contacts_count ?? 0), 0)
   const totalSent     = rules.reduce((s, r) => s + (r.sent_count ?? 0), 0)
@@ -223,7 +229,7 @@ export default function RetargetingPage() {
                   <button onClick={() => toggle(rule)} className={clsx('w-8 h-8 rounded-lg flex items-center justify-center', rule.status === 'active' ? 'bg-yellow-50 hover:bg-yellow-100' : 'bg-emerald-50 hover:bg-emerald-100')}>
                     {rule.status === 'active' ? <Pause size={14} className="text-yellow-600" /> : <Play size={14} className="text-emerald-600" />}
                   </button>
-                  <button className="w-8 h-8 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center">
+                  <button onClick={() => remove(rule)} className="w-8 h-8 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center">
                     <Trash2 size={14} className="text-red-500" />
                   </button>
                 </div>

@@ -7,9 +7,21 @@ import { supabaseAdmin } from '@/lib/supabase'
  */
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
+  const hasQuery = searchParams.has('query')
   const query = (searchParams.get('query') ?? '').toLowerCase()
   const campaignId = searchParams.get('campaignId') ?? undefined
   const limit = parseInt(searchParams.get('limit') ?? '3', 10)
+
+  // Mode admin CRUD — pas de query => retourne toutes les entrées (actives + inactives)
+  if (!hasQuery) {
+    const { data, error } = await supabaseAdmin
+      .from('knowledge_base')
+      .select('*')
+      .order('priority', { ascending: true })
+      .order('created_at', { ascending: false })
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json(data ?? [])
+  }
 
   const { data: entries, error } = await supabaseAdmin
     .from('knowledge_base')
