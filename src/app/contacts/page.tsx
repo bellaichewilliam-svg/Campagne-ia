@@ -115,7 +115,9 @@ function ContactModal({ contact, onClose, onSaved }: { contact?: Contact; onClos
 }
 
 function parseCSV(text: string): Record<string, string>[] {
-  const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim().length > 0)
+  // Strip UTF-8 BOM (Excel)
+  const clean = text.replace(/^﻿/, '')
+  const lines = clean.replace(/\r/g, '').split('\n').filter(l => l.trim().length > 0)
   if (lines.length < 2) return []
   const sep = (lines[0].match(/;/g)?.length ?? 0) > (lines[0].match(/,/g)?.length ?? 0) ? ';' : ','
   const splitLine = (l: string) => {
@@ -139,11 +141,22 @@ function parseCSV(text: string): Record<string, string>[] {
 }
 
 const HEADER_ALIASES: Record<string, string> = {
-  prenom: 'first_name', prénom: 'first_name', firstname: 'first_name',
-  nom: 'last_name', lastname: 'last_name',
+  prenom: 'first_name', prénom: 'first_name', firstname: 'first_name', first: 'first_name',
+  nom: 'last_name', lastname: 'last_name', last: 'last_name', name: 'last_name',
   telephone: 'phone', téléphone: 'phone', tel: 'phone', mobile: 'phone',
-  mail: 'email', courriel: 'email',
-  entreprise: 'company', societe: 'company', société: 'company',
+  numero: 'phone', numéro: 'phone', portable: 'phone',
+  mail: 'email', courriel: 'email', 'e-mail': 'email',
+  entreprise: 'company', societe: 'company', société: 'company', organisation: 'company',
+  segment: 'segment', categorie: 'segment', catégorie: 'segment',
+  statut: 'status', état: 'status', etat: 'status',
+}
+
+function normStatus(s: string): 'prospect' | 'lead' | 'client' | 'inactif' {
+  const v = (s || '').toLowerCase().trim()
+  if (v.startsWith('client')) return 'client'
+  if (v.startsWith('lead')) return 'lead'
+  if (v.startsWith('inact')) return 'inactif'
+  return 'prospect'
 }
 
 function BulkAddToCampaignModal({ contactIds, onClose, onDone }: { contactIds: string[]; onClose: () => void; onDone: () => void }) {
@@ -226,7 +239,10 @@ export default function ContactsPage() {
       if (filterStatus !== 'all') params.set('status', filterStatus)
       if (search) params.set('search', search)
       const res = await fetch(`/api/contacts?${params}`)
-      setContacts(await res.json())
+      const data = await res.json().catch(() => [])
+      setContacts(Array.isArray(data) ? data : [])
+    } catch {
+      setContacts([])
     } finally {
       setLoading(false)
     }
@@ -252,23 +268,35 @@ export default function ContactsPage() {
     try {
       const text = await file.text()
       const rows = parseCSV(text)
+      if (rows.length === 0) {
+        setImportMsg('CSV vide ou sans en-tête')
+        return
+      }
+
       const mapped = rows.map(r => {
-        const out: Record<string, string | number> = {}
+        const out: Record<string, string> = {}
         for (const [k, v] of Object.entries(r)) {
           const key = HEADER_ALIASES[k] ?? k
           if (['first_name', 'last_name', 'phone', 'email', 'company', 'segment', 'status', 'notes'].includes(key)) {
-            out[key] = v
+            out[key] = (v ?? '').trim()
           }
         }
         return {
-          first_name: '', last_name: '', email: '', company: '',
-          segment: 'Standard', status: 'prospect', score: 50, notes: '',
-          ...out,
+          first_name: out.first_name ?? '',
+          last_name: out.last_name ?? '',
+          phone: (out.phone ?? '').replace(/\s+/g, ''),
+          email: out.email ?? '',
+          company: out.company ?? '',
+          segment: out.segment || 'Standard',
+          status: normStatus(out.status ?? ''),
+          score: 50,
+          notes: out.notes ?? '',
+          campaigns_count: 0,
         }
-      }).filter(r => r.phone)
+      }).filter(r => r.phone.length > 0)
 
       if (mapped.length === 0) {
-        setImportMsg('Aucune ligne valide (colonne "phone" requise)')
+        setImportMsg(`Aucune ligne valide. Colonnes détectées : ${Object.keys(rows[0]).join(', ')}. Une colonne téléphone est requise (ex: phone, telephone, tel, mobile).`)
         return
       }
 
@@ -277,15 +305,15 @@ export default function ContactsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(mapped),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error ?? 'Erreur')
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
       setImportMsg(`${data.inserted ?? mapped.length} contact(s) importé(s)`)
       load()
     } catch (e) {
-      setImportMsg(e instanceof Error ? e.message : 'Erreur import')
+      setImportMsg(e instanceof Error ? `Erreur : ${e.message}` : 'Erreur import')
     } finally {
       setImporting(false)
-      setTimeout(() => setImportMsg(null), 4000)
+      setTimeout(() => setImportMsg(null), 6000)
     }
   }
 

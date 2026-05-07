@@ -247,8 +247,13 @@ export default function CampaignsPage() {
         fetch('/api/campaigns'),
         fetch('/api/vapi/voices'),
       ])
-      setCampaigns(await campsRes.json())
-      setVoices(await voicesRes.json())
+      const camps = await campsRes.json().catch(() => [])
+      const vs = await voicesRes.json().catch(() => [])
+      setCampaigns(Array.isArray(camps) ? camps : [])
+      setVoices(Array.isArray(vs) ? vs : [])
+    } catch {
+      setCampaigns([])
+      setVoices([])
     } finally {
       setLoading(false)
     }
@@ -291,16 +296,17 @@ export default function CampaignsPage() {
   }
 
   const filtered = campaigns.filter(c => {
-    const matchSearch = c.name.toLowerCase().includes(search.toLowerCase())
+    const matchSearch = (c.name ?? '').toLowerCase().includes(search.toLowerCase())
     const matchFilter = filter === 'all' || c.status === filter
     return matchSearch && matchFilter
   })
 
-  const openRate = (c: Campaign) => c.called_count > 0
-    ? ((c.answered_count / c.called_count) * 100).toFixed(1)
+  const num = (n: number | null | undefined) => n ?? 0
+  const openRate = (c: Campaign) => num(c.called_count) > 0
+    ? ((num(c.answered_count) / num(c.called_count)) * 100).toFixed(1)
     : '0.0'
-  const convRate = (c: Campaign) => c.answered_count > 0
-    ? ((c.converted_count / c.answered_count) * 100).toFixed(1)
+  const convRate = (c: Campaign) => num(c.answered_count) > 0
+    ? ((num(c.converted_count) / num(c.answered_count)) * 100).toFixed(1)
     : '0.0'
 
   return (
@@ -358,22 +364,22 @@ export default function CampaignsPage() {
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4">
                     <div>
                       <p className="text-[11px] text-gray-400 mb-1">Contacts</p>
-                      <p className="text-sm font-semibold text-gray-800">{c.contacts_count.toLocaleString()}</p>
+                      <p className="text-sm font-semibold text-gray-800">{num(c.contacts_count).toLocaleString()}</p>
                     </div>
                     <div>
                       <p className="text-[11px] text-gray-400 mb-1">Appelés</p>
-                      <p className="text-sm font-semibold text-gray-800">{c.called_count.toLocaleString()}</p>
-                      <ProgressBar value={c.called_count} max={c.contacts_count} color="bg-brand-400" />
+                      <p className="text-sm font-semibold text-gray-800">{num(c.called_count).toLocaleString()}</p>
+                      <ProgressBar value={num(c.called_count)} max={num(c.contacts_count)} color="bg-brand-400" />
                     </div>
                     <div>
                       <p className="text-[11px] text-gray-400 mb-1">Taux d'ouverture</p>
                       <p className="text-sm font-semibold text-gray-800">{openRate(c)}%</p>
-                      <ProgressBar value={c.answered_count} max={c.called_count} color="bg-blue-400" />
+                      <ProgressBar value={num(c.answered_count)} max={num(c.called_count)} color="bg-blue-400" />
                     </div>
                     <div>
                       <p className="text-[11px] text-gray-400 mb-1">Conversion</p>
                       <p className="text-sm font-semibold text-emerald-600">{convRate(c)}%</p>
-                      <ProgressBar value={c.converted_count} max={c.answered_count} color="bg-emerald-400" />
+                      <ProgressBar value={num(c.converted_count)} max={num(c.answered_count)} color="bg-emerald-400" />
                     </div>
                   </div>
                 </div>

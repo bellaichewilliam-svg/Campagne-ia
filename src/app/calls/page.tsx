@@ -71,7 +71,10 @@ export default function CallsPage() {
       const params = new URLSearchParams()
       if (filterStatus !== 'all') params.set('status', filterStatus)
       const res = await fetch(`/api/calls?${params}`)
-      setCalls(await res.json())
+      const data = await res.json().catch(() => [])
+      setCalls(Array.isArray(data) ? data : [])
+    } catch {
+      setCalls([])
     } finally {
       setLoading(false)
     }
